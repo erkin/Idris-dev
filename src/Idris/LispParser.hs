@@ -1,11 +1,12 @@
 module Idris.LispParser where
 
-import Control.Monad
+import Data.Ratio
 import Text.ParserCombinators.Parsec
 
 data SExpr = TSymbol String
            | TList [SExpr]
            | TInteger Integer
+           | TRational Rational
            | TString String
            | TChar Char
             deriving (Show)
@@ -24,12 +25,15 @@ parseExpr :: Parser SExpr
 parseExpr = spaces >> (parseList <|> parseAtom)
 
 parseAtom :: Parser SExpr
-parseAtom = parseChar <|> try parseHex <|> try parseInteger <|> parseString <|> parseSymbol
+parseAtom = parseChar <|> parseNumber <|> parseString <|> parseSymbol
 
 parseSymbol :: Parser SExpr
 parseSymbol = do first <- symbolChar
                  rest <- many (symbolChar <|> digit)
                  return $ TSymbol $ first:rest
+
+parseNumber :: Parser SExpr
+parseNumber = try parseHex <|> try parseFloat <|> try parseRatio <|> try parseInteger
 
 parseSign :: Parser Integer
 parseSign = (char '+' >> return 1) <|> (char '-' >> return (-1)) <|> return 1
@@ -37,7 +41,24 @@ parseSign = (char '+' >> return 1) <|> (char '-' >> return (-1)) <|> return 1
 parseInteger :: Parser SExpr
 parseInteger = do sign <- parseSign
                   digits <- many1 digit
-                  return $ TInteger $ sign * (read digits)
+                  return $ TInteger $ sign * read digits
+
+parseFloat :: Parser SExpr
+parseFloat = do sign <- parseSign
+                whole <- many digit
+                char '.'
+                fraction <- many1 digit
+                return $ TRational $ (toRational sign) *
+                                     ((toRational $ if null whole then 0 else read whole) +
+                                      (read fraction) % 10 ^ (length fraction))
+
+parseRatio :: Parser SExpr
+parseRatio = do numSign <- parseSign
+                num <- many1 digit
+                char '/'
+                denomSign <- parseSign
+                denom <- many1 digit
+                return $ TRational $ (numSign * read num) % (denomSign * read denom)
 
 parseHex :: Parser SExpr
 parseHex = do sign <- parseSign
