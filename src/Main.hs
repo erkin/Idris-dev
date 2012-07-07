@@ -18,6 +18,7 @@ import Core.Evaluate
 import Core.Constraints
 
 import Idris.AbsSyntax
+import Idris.ParserCommon
 import Idris.Parser
 import Idris.REPL
 import Idris.ElabDecls
@@ -61,11 +62,11 @@ runIdris opts =
          (d:_) -> setIBCSubDir d
        setImportDirs importdirs
        elabPrims
-       when (not (NoPrelude `elem` opts)) $ do x <- loadModule "prelude"
+       when (not (NoPrelude `elem` opts)) $ do x <- loadModule "prelude" pImportBlock pDeclSet
                                                return ()
        when runrepl $ iputStrLn banner 
        ist <- get
-       mods <- mapM loadModule inputs
+       mods <- mapM (\m -> loadModule m pImportBlock pDeclSet) inputs
        ok <- noErrors
        when ok $ case output of
                     [] -> return ()
