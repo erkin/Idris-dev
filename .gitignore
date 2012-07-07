@@ -1,2 +1,4 @@
 dist
 *.ibc
+rts/*.o
+rts/libidris_rts.a
