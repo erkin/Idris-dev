@@ -76,6 +76,8 @@ VAL mkThunk(VM* vm, func fn, int args, int arity) {
        VAL* v = POP;
        *argptr++ = v;
     }
+
+    return cl;
 }
 
 VAL mkCon(VM* vm, int tag, int arity) {
@@ -89,6 +91,8 @@ VAL mkCon(VM* vm, int tag, int arity) {
        VAL* v = POP;
        *argptr++ = v;
     }
+
+    return cl;
 }
 
 // if 'update' is set, update the value at the top of the stack
