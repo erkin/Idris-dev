@@ -116,13 +116,11 @@ instance Ord Nat where
   compare (S k) O     = GT
   compare (S x) (S y) = compare x y
 
-instance Num Nat where
+instance Semigroup Nat where
   (+) = plus
-  (-) = minus
-  (*) = mult
 
-  abs x = x
-
+instance Monoid Nat where
+  neutral = 0
   fromInteger = fromInteger'
     where
       %assert_total
@@ -134,43 +132,16 @@ instance Num Nat where
         else
           O
 
-record Multiplicative : Set where
-  getMultiplicative : Nat -> Multiplicative
+instance Group Nat where
+  (-) = minus
 
-record Additive : Set where
-  getAdditive : Nat -> Additive
+instance AbelianGroup Nat where {}
 
-instance Semigroup Multiplicative where
-  (<+>) left right = getMultiplicative $ left' * right'
-    where
-      left'  : Nat
-      left'  =
-       case left of
-          getMultiplicative m => m
+instance Ring Nat where
+  (*) = mult
 
-      right' : Nat
-      right' =
-        case right of
-          getMultiplicative m => m
-
-instance Semigroup Additive where
-  left <+> right = getAdditive $ left' + right'
-    where
-      left'  : Nat
-      left'  =
-        case left of
-          getAdditive m => m
-
-      right' : Nat
-      right' =
-        case right of
-          getAdditive m => m
-
-instance Monoid Multiplicative where
-  neutral = getMultiplicative $ S O
-
-instance Monoid Additive where
-  neutral = getAdditive O
+instance RingWithUnity Nat where
+  unity = 1
 
 instance MeetSemilattice Nat where
   meet = minimum
