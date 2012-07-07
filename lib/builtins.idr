@@ -88,8 +88,7 @@ not False = True
 infixl 5 ==, /=
 infixl 6 <, <=, >, >=
 infixl 7 <<, >>
-infixl 8 +,-,++
-infixl 9 *,/
+infixl 8 ++
 
 --- Numeric operators
 
@@ -196,51 +195,6 @@ instance (Ord a, Ord b) => Ord (a, b) where
     if xl /= yl
       then compare xl yl
       else compare xr yr
-
-
-class Num a where 
-    (+) : a -> a -> a
-    (-) : a -> a -> a
-    (*) : a -> a -> a
-
-    abs : a -> a
-    fromInteger : Int -> a
-
-
-
-instance Num Int where 
-    (+) = prim__addInt
-    (-) = prim__subInt
-    (*) = prim__mulInt
-
-    fromInteger = id
-    abs x = if x<0 then -x else x
-
-
-instance Num Integer where 
-    (+) = prim__addBigInt
-    (-) = prim__subBigInt
-    (*) = prim__mulBigInt
-
-    abs x = if x<0 then -x else x
-    fromInteger = prim__intToBigInt
-
-
-instance Num Float where 
-    (+) = prim__addFloat
-    (-) = prim__subFloat
-    (*) = prim__mulFloat
-
-    abs x = if x<0 then -x else x
-    fromInteger = prim__intToFloat 
-
-
-div : Int -> Int -> Int
-div = prim__divInt
-
-
-(/) : Float -> Float -> Float
-(/) = prim__divFloat
 
 --- string operators
 
