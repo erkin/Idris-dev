@@ -68,7 +68,7 @@ parseHex = do sign <- parseSign
 
 parseChar :: Parser SExpr
 parseChar = do char '\''
-               x <- anyChar
+               x <- (escapedChar <|> noneOf "'")
                char '\''
                return $ TChar x
 
@@ -91,9 +91,8 @@ parseString = do char '"'
 
 escapedChar :: Parser Char
 escapedChar = do char '\\'
-                 c <- oneOf "\"\\ntu"
+                 c <- anyChar
                  return $ case c of
-                               '"' -> '"'
                                'n' -> '\n'
                                't' -> '\t'
-                               '\\' -> '\\'
+                               _ -> c
