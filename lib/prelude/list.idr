@@ -3,6 +3,7 @@ module prelude.list
 import builtins
 
 import prelude.algebra
+import prelude.monad
 import prelude.maybe
 import prelude.nat
 
@@ -192,9 +193,9 @@ unzip3 ((l, c, r)::xs) with (unzip3 xs)
 -- Maps
 --------------------------------------------------------------------------------
 
-map : (a -> b) -> List a -> List b
-map f []      = []
-map f (x::xs) = f x :: map f xs
+instance Functor List where
+  map f [] = []
+  map f (x::xs) = f x :: map f xs
 
 mapMaybe : (a -> Maybe b) -> List a -> List b
 mapMaybe f []      = []
@@ -202,6 +203,21 @@ mapMaybe f (x::xs) =
   case f x of
     Nothing => mapMaybe f xs
     Just j  => j :: mapMaybe f xs
+
+sequence : Monad m => List (m a) -> m (List a)
+sequence []        = return []
+sequence (x :: xs) = [ x' :: xs' | x' <- x, xs' <- sequence xs ]
+
+sequence_ : Monad m => List (m a) -> m ()
+sequence_ [] = return ()
+sequence_ (x :: xs) = do x; sequence_ xs
+
+mapM : Monad m => (a -> m b) -> List a -> m (List b)
+mapM f xs = sequence (map f xs)
+
+mapM_ : Monad m => (a -> m b) -> List a -> m ()
+mapM_ f xs = sequence_ (map f xs)
+
 
 --------------------------------------------------------------------------------
 -- Folds
