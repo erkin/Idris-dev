@@ -11,6 +11,7 @@ import Idris.ElabTerm
 import Idris.Coverage
 import Idris.IBC
 import Idris.Unlit
+import Idris.ParserCommon
 import Paths_idris
 
 import Core.CoreParser
@@ -30,8 +31,6 @@ import Data.Maybe
 import System.FilePath
 
 type TokenParser a = PTok.TokenParser a
-
-type IParser = GenParser Char IState
 
 lexer :: TokenParser IState
 lexer  = PTok.makeTokenParser idrisDef
@@ -163,13 +162,11 @@ pImportBlock = do whiteSpace
                   pos <- getPosition
                   return (mname, ps, rest, pos)
 
-pImport :: IParser String
+pImport :: IParser [String]
 pImport = do reserved "import"
-             f <- identifier
+             f <- sepBy identifier (char '.')
              option ';' (lchar ';')
-             return (map dot f)
-  where dot '.' = '/'
-        dot c = c
+             return f
 
 pFullExpr :: SyntaxInfo -> IParser PTerm
 pFullExpr syn 

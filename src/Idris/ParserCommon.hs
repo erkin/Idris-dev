@@ -28,7 +28,8 @@ import System.FilePath
 
 type IParser = GenParser Char IState
 type ProgParser = SourcePos -> SyntaxInfo -> IParser ([PDecl], IState)
-type ImportParser = IParser ([String], [String], String, SourcePos)
+--                           module    imports     code    start
+type ImportParser = IParser ([String], [[String]], String, SourcePos)
 
 -- Loading modules
 
@@ -63,11 +64,12 @@ loadSource lidr f importParser progParser
                   file_in <- liftIO $ readFile f
                   file <- if lidr then tclift $ unlit f file_in else return file_in
                   (mname, modules, rest, pos) <- parseImports f file importParser
+                  let modulePaths = map (intercalate "/") modules
                   i <- getIState
                   putIState (i { default_access = Hidden })
-                  mapM_ (\m -> loadModule m importParser progParser) modules
+                  mapM_ (\m -> loadModule m importParser progParser) modulePaths
                   clearIBC -- start a new .ibc file
-                  mapM_ (\m -> addIBC (IBCImport m)) modules
+                  mapM_ (\m -> addIBC (IBCImport m)) modulePaths
                   ds' <- parseProg (defaultSyntax {syn_namespace = reverse mname }) 
                                    f rest pos progParser
                   let ds = namespaces mname ds'
@@ -112,7 +114,7 @@ addHides xs = do i <- getIState
         doHide (n, a) = do setAccessibility n a
                            addIBC (IBCAccess n a)
 
-parseImports :: FilePath -> String -> ImportParser -> Idris ([String], [String], String, SourcePos)
+parseImports :: FilePath -> String -> ImportParser -> Idris ([String], [[String]], String, SourcePos)
 parseImports fname input parser
     = do i <- get
          case (runParser parser i fname input) of
