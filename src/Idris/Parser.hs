@@ -57,7 +57,7 @@ parseTac i = runParser (do t <- pTactic defaultSyntax
                            eof
                            return t) i "(proof)"
 
-pHeader :: IParser [String]
+pHeader :: IParser ModuleID
 pHeader = try (do reserved "module"; i <- identifier; option ';' (lchar ';')
                   return (parseName i))
      <|> return []
@@ -162,7 +162,7 @@ pImportBlock = do whiteSpace
                   pos <- getPosition
                   return (mname, ps, rest, pos)
 
-pImport :: IParser [String]
+pImport :: IParser ModuleID
 pImport = do reserved "import"
              f <- sepBy identifier (char '.')
              option ';' (lchar ';')

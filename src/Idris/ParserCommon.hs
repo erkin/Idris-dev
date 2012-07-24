@@ -26,10 +26,11 @@ import Debug.Trace
 import Data.Maybe
 import System.FilePath
 
+type ModuleID = [String]
 type IParser = GenParser Char IState
 type ProgParser = SourcePos -> SyntaxInfo -> IParser ([PDecl], IState)
 --                           module    imports     code    start
-type ImportParser = IParser ([String], [[String]], String, SourcePos)
+type ImportParser = IParser (ModuleID, [ModuleID], String, SourcePos)
 
 -- Loading modules
 
@@ -114,7 +115,7 @@ addHides xs = do i <- getIState
         doHide (n, a) = do setAccessibility n a
                            addIBC (IBCAccess n a)
 
-parseImports :: FilePath -> String -> ImportParser -> Idris ([String], [[String]], String, SourcePos)
+parseImports :: FilePath -> String -> ImportParser -> Idris (ModuleID, [ModuleID], String, SourcePos)
 parseImports fname input parser
     = do i <- get
          case (runParser parser i fname input) of
