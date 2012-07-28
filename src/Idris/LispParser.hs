@@ -52,7 +52,7 @@ parseAtom :: GenParser Char a SExpr
 parseAtom = parseChar <|> parseNumber <|> parseString <|> parseSymbol
 
 parseSymbol :: GenParser Char a SExpr
-parseSymbol = do cs <- sepBy (many symbolChar) (char namespaceChar)
+parseSymbol = do cs <- sepBy1 (many1 symbolChar) (char namespaceChar)
                  return $ TSymbol $ cs
 
 parseNumber :: GenParser Char a SExpr
@@ -99,7 +99,7 @@ parseChar = do char '\''
 
 parseList :: GenParser Char a SExpr
 parseList = do char '('
-               x <- sepBy parseExpr separator
+               x <- many (skipMany space >> parseExpr)
                char ')'
                return $ TList x
 
@@ -111,10 +111,7 @@ inList p =
        return x
 
 
-symbolChar :: GenParser Char a Char
 symbolChar = noneOf $ commentChar : namespaceChar : "() \v\f\t\r\n"
-
-separator = skipMany1 space
 
 parseString :: GenParser Char a SExpr
 parseString = do char '"'
@@ -132,7 +129,7 @@ escapedChar = do char '\\'
 
 -- Semantics
 parseModuleDecl :: GenParser Char a (ModuleID, [ModuleID], String, SourcePos)
-parseModuleDecl = try $
+parseModuleDecl =
     do TList (TSymbol ["module"] : TSymbol name : xs) <- parseList
        rest <- getInput
        pos <- getPosition
@@ -147,4 +144,4 @@ importParser :: ImportParser
 importParser =
     do i <- getInput
        p <- getPosition
-       parseModuleDecl <|> return ([], [], i, p)
+       (try parseModuleDecl) <|> return ([], [], i, p)
