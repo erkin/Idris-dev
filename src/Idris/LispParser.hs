@@ -103,6 +103,7 @@ parseChar = do char '\''
 parseList :: GenParser Char a [SExpr]
 parseList = do char '('
                x <- many (whitespace >> parseExpr)
+               whitespace
                char ')'
                return x
 
