@@ -146,14 +146,6 @@ notEndBlock = do ist <- getState
                                                      else return ()
                     _ -> return ()
 
-pfc :: IParser FC
-pfc = do s <- getPosition
-         let (dir, file) = splitFileName (sourceName s)
-         let f = case dir of
-                    "./" -> file
-                    _ -> sourceName s
-         return $ FC f (sourceLine s)
-
 -- For passing to parseImports
 pImportBlock = do whiteSpace
                   mname <- pHeader

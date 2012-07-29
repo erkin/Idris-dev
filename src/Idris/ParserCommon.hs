@@ -159,3 +159,11 @@ collect (PInstance f s cs n ps t en ds : ds')
     = PInstance f s cs n ps t en (collect ds) : collect ds'
 collect (d : ds) = d : collect ds
 collect [] = []
+
+pfc :: IParser FC
+pfc = do s <- getPosition
+         let (dir, file) = splitFileName (sourceName s)
+         let f = case dir of
+                    "./" -> file
+                    _ -> sourceName s
+         return $ FC f (sourceLine s)
