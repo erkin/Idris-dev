@@ -45,7 +45,11 @@ namespaceChar :: Char
 namespaceChar = '.'
 
 parseLineComment :: GenParser Char a ()
-parseLineComment = char commentChar >> anyChar >> ((newline >> return ())  <|> eof) >> return ()
+parseLineComment =
+    do char commentChar
+       many (noneOf "\n")
+       (newline >> return ()) <|> eof
+       return ()
 
 parseAtom :: GenParser Char a SExpr
 parseAtom = parseChar <|> parseNumber <|> parseString <|> parseSymbol
