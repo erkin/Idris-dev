@@ -28,13 +28,12 @@ readSExprs input = readSExprs' $ parse parseExprs "" input
           readSExprs' (Right result) = result
 
 parseExprs :: GenParser Char a [SExpr]
-parseExprs = do exprs <- many exprOrComment
-                spaces
+parseExprs = do exprs <- sepEndBy exprOrComment whitespace
                 eof
                 return $ catMaybes exprs
              where
                 exprOrComment :: GenParser Char a (Maybe SExpr)
-                exprOrComment = spaces >> ((parseLineComment >> return Nothing) <|> (parseExpr >>= return . Just))
+                exprOrComment = whitespace >> ((parseLineComment >> return Nothing) <|> (parseExpr >>= return . Just))
 
 parseExpr :: GenParser Char a SExpr
 parseExpr = (parseList <|> parseAtom)
@@ -99,7 +98,7 @@ parseChar = do char '\''
 
 parseList :: GenParser Char a SExpr
 parseList = do char '('
-               x <- many (skipMany space >> parseExpr)
+               x <- many (whitespace >> parseExpr)
                char ')'
                return $ TList x
 
@@ -111,7 +110,9 @@ inList p =
        return x
 
 
-symbolChar = noneOf $ commentChar : namespaceChar : "() \v\f\t\r\n"
+whitespaceChars = " \v\f\t\r\n"
+whitespace = many $ oneOf whitespaceChars
+symbolChar = noneOf $ commentChar : namespaceChar : "\"()" ++ whitespaceChars
 
 parseString :: GenParser Char a SExpr
 parseString = do char '"'
