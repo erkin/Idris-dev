@@ -5,6 +5,8 @@ import Data.Maybe
 import Data.List
 import Text.ParserCombinators.Parsec
 import Idris.ParserCommon
+import Idris.AbsSyntax
+import Core.TT
 
 data SExpr = TSymbol [String]
            | TList [SExpr]
@@ -145,6 +147,28 @@ parseModuleDecl =
          [] -> return (name, [], rest, pos)
          _ -> fail $ "Not an import form: " ++ show xs
 
+mkNS :: [String] -> Name
+mkNS [x] = UN x
+mkNS (x:xs) = NS (UN x) xs
+
+parseDef :: SyntaxInfo -> IParser [PDecl]
+parseDef syn = do
+  (TSymbol ["def"] : TSymbol name : ty : args : body) <- parseList
+  fc <- pfc
+  let iname = mkNS (reverse name)
+  return [PTy syn fc [] iname (mkTerm fc ty)]
+--          PClauses fc [] iname [PClause fc iname ]]
+
+mkTerm :: FC -> SExpr -> PTerm
+mkTerm fc (TList (x:xs))     = PApp fc (mkTerm fc x) (map ((PExp 1 False) . (mkTerm fc)) $ xs)
+mkTerm fc (TSymbol ["_"])    = Placeholder
+mkTerm fc (TSymbol ['?':xs]) = PMetavar $ UN xs
+mkTerm fc (TSymbol name)     = PRef fc (mkNS $ reverse name)
+mkTerm _  (TString str)      = PConstant $ Str str
+mkTerm _  (TChar char)       = PConstant $ Ch char
+-- TODO: Prevent loss of precision here
+mkTerm _  (TInteger i)       = PConstant $ I $ fromInteger i
+mkTerm _  (TRational i)      = PConstant $ Fl $ fromRational i
 
 importParser :: ImportParser
 importParser =
