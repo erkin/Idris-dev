@@ -36,7 +36,7 @@ parseExprs = do exprs <- sepEndBy exprOrComment whitespace
                 exprOrComment = whitespace >> ((parseLineComment >> return Nothing) <|> (parseExpr >>= return . Just))
 
 parseExpr :: GenParser Char a SExpr
-parseExpr = (parseList <|> parseAtom)
+parseExpr = (fmap TList parseList <|> parseAtom)
 
 commentChar :: Char
 commentChar = ';'
@@ -52,25 +52,25 @@ parseLineComment =
        return ()
 
 parseAtom :: GenParser Char a SExpr
-parseAtom = parseChar <|> parseNumber <|> parseString <|> parseSymbol
+parseAtom =     fmap TChar     parseChar
+            <|> fmap TRational parseRational
+            <|> fmap TInteger  parseInteger
+            <|> fmap TString   parseString
+            <|> fmap TSymbol   parseSymbol
 
-parseSymbol :: GenParser Char a SExpr
-parseSymbol = do cs <- sepBy1 (many1 symbolChar) (char namespaceChar)
-                 return $ TSymbol $ cs
+parseSymbol :: GenParser Char a [String]
+parseSymbol = sepBy1 (many1 symbolChar) (char namespaceChar)
 
-parseNumber :: GenParser Char a SExpr
-parseNumber =   try (parseHex     >>= return . TInteger)
-            <|> try (parseFloat   >>= return . TRational)
-            <|> try (parseRatio   >>= return . TRational)
-            <|> try (parseInteger >>= return . TInteger)
+parseRational = try parseFloat <|> try parseRatio
+parseInteger = try parseHex <|> try parseDec
 
 parseSign :: GenParser Char a Integer
 parseSign = (char '+' >> return 1) <|> (char '-' >> return (-1)) <|> return 1
 
-parseInteger :: GenParser Char a Integer
-parseInteger = do sign <- parseSign
-                  digits <- many1 digit
-                  return $ sign * read digits
+parseDec :: GenParser Char a Integer
+parseDec = do sign <- parseSign
+              digits <- many1 digit
+              return $ sign * read digits
 
 parseFloat :: GenParser Char a Rational
 parseFloat = do sign <- parseSign
@@ -94,17 +94,17 @@ parseHex = do sign <- parseSign
               digits <- many1 digit
               return $ sign * (read $ "0x" ++ digits)
 
-parseChar :: GenParser Char a SExpr
+parseChar :: GenParser Char a Char
 parseChar = do char '\''
                x <- (escapedChar <|> noneOf "'")
                char '\''
-               return $ TChar x
+               return x
 
-parseList :: GenParser Char a SExpr
+parseList :: GenParser Char a [SExpr]
 parseList = do char '('
                x <- many (whitespace >> parseExpr)
                char ')'
-               return $ TList x
+               return x
 
 inList :: GenParser Char a b -> GenParser Char a b
 inList p =
@@ -118,11 +118,11 @@ whitespaceChars = " \v\f\t\r\n"
 whitespace = many $ oneOf whitespaceChars
 symbolChar = noneOf $ commentChar : namespaceChar : "\"()" ++ whitespaceChars
 
-parseString :: GenParser Char a SExpr
+parseString :: GenParser Char a String
 parseString = do char '"'
                  s <- many (escapedChar <|> noneOf "\"\\")
                  char '"'
-                 return $ TString s
+                 return s
 
 escapedChar :: GenParser Char a Char
 escapedChar = do char '\\'
@@ -135,7 +135,7 @@ escapedChar = do char '\\'
 -- Semantics
 parseModuleDecl :: GenParser Char a (ModuleID, [ModuleID], String, SourcePos)
 parseModuleDecl =
-    do TList (TSymbol ["module"] : TSymbol name : xs) <- parseList
+    do (TSymbol ["module"] : TSymbol name : xs) <- parseList
        rest <- getInput
        pos <- getPosition
        case xs of
