@@ -8,66 +8,47 @@ import Idris.ParserCommon
 import Idris.AbsSyntax
 import Core.TT
 
-data SExpr = TSymbol [String]
-           | TList [SExpr]
-           | TInteger Integer
-           | TRational Rational
-           | TString String
-           | TChar Char
-            deriving (Show)
+namespaceChar :: Char
+namespaceChar = '.'
 
-symbolName :: SExpr -> Maybe String
-symbolName (TSymbol p) = Just $ last p
-symbolName _ = Nothing
+anySymbol :: GenParser Char a [String]
+anySymbol = spaceOrComment >> sepBy1 (many1 symbolChar) (char namespaceChar)
 
-symbolPath :: SExpr -> Maybe [String]
-symbolPath (TSymbol p) = Just p
-symbolPath _ = Nothing
+symbol :: [String] -> GenParser Char s [String]
+symbol n = spaceOrComment >> (string $ intercalate [namespaceChar] n) >> return n
 
-readSExprs :: String -> [SExpr]
-readSExprs input = readSExprs' $ parse parseExprs "" input
-    where readSExprs' (Left err) = error $ show err
-          readSExprs' (Right result) = result
+lparen :: GenParser Char s ()
+lparen = spaceOrComment >> char '(' >> return ()
 
-parseExprs :: GenParser Char a [SExpr]
-parseExprs = do exprs <- sepEndBy exprOrComment whitespace
-                eof
-                return $ catMaybes exprs
-             where
-                exprOrComment :: GenParser Char a (Maybe SExpr)
-                exprOrComment = whitespace >> ((parseLineComment >> return Nothing) <|> (parseExpr >>= return . Just))
+rparen :: GenParser Char s ()
+rparen = spaceOrComment >> char ')' >> return ()
 
-parseExpr :: GenParser Char a SExpr
-parseExpr = (fmap TList parseList <|> parseAtom)
+listOf :: GenParser Char s a -> GenParser Char s a
+listOf body = between lparen rparen body
 
 commentChar :: Char
 commentChar = ';'
 
-namespaceChar :: Char
-namespaceChar = '.'
-
-parseLineComment :: GenParser Char a ()
+parseLineComment :: GenParser Char a String
 parseLineComment =
-    do char commentChar
-       many (noneOf "\n")
-       (newline >> return ()) <|> eof
-       return ()
+    (do char commentChar
+        text <- many (noneOf "\n")
+        (newline >> return ()) <|> eof
+        return text) <?> "comment"
 
-parseAtom :: GenParser Char a SExpr
-parseAtom =     fmap TChar     parseChar
-            <|> fmap TRational parseRational
-            <|> fmap TInteger  parseInteger
-            <|> fmap TString   parseString
-            <|> fmap TSymbol   parseSymbol
+constant :: GenParser Char a Const
+constant = spaceOrComment >>
+         (   fmap Ch charLiteral
+         <|> fmap Str stringLiteral
+         -- TODO: Prevent loss of precision here
+         <|> fmap (Fl . fromRational) parseRational
+         <|> fmap (I  . fromIntegral) parseInteger)
 
-parseSymbol :: GenParser Char a [String]
-parseSymbol = sepBy1 (many1 symbolChar) (char namespaceChar)
-
-parseRational = try parseFloat <|> try parseRatio
-parseInteger = try parseHex <|> try parseDec
+parseRational = (try parseFloat <|> try parseRatio) <?> "rational literal"
+parseInteger = (try hexLiteral <|> try parseDec) <?> "integer literal"
 
 parseSign :: GenParser Char a Integer
-parseSign = (char '+' >> return 1) <|> (char '-' >> return (-1)) <|> return 1
+parseSign = ((char '+' >> return 1) <|> (char '-' >> return (-1)) <|> return 1) <?> "sign"
 
 parseDec :: GenParser Char a Integer
 parseDec = do sign <- parseSign
@@ -90,42 +71,29 @@ parseRatio = do num <- parseInteger
                 denom <- parseInteger
                 return $ num % denom
 
-parseHex :: GenParser Char a Integer
-parseHex = do sign <- parseSign
-              string "0x"
-              digits <- many1 digit
-              return $ sign * (read $ "0x" ++ digits)
+hexLiteral :: GenParser Char a Integer
+hexLiteral = do sign <- parseSign
+                string "0x"
+                digits <- many1 digit
+                return $ sign * (read $ "0x" ++ digits)
 
-parseChar :: GenParser Char a Char
-parseChar = do char '\''
-               x <- (escapedChar <|> noneOf "'")
-               char '\''
-               return x
-
-parseList :: GenParser Char a [SExpr]
-parseList = do char '('
-               x <- many (whitespace >> parseExpr)
-               whitespace
-               char ')'
-               return x
-
-inList :: GenParser Char a b -> GenParser Char a b
-inList p =
-    do char '('
-       x <- p
-       char ')'
-       return x
-
+charLiteral :: GenParser Char a Char
+charLiteral = (do char '\''
+                  x <- (escapedChar <|> noneOf "'")
+                  char '\''
+                  return x) <?> "character literal"
 
 whitespaceChars = " \v\f\t\r\n"
-whitespace = many $ oneOf whitespaceChars
-symbolChar = noneOf $ commentChar : namespaceChar : "\"()" ++ whitespaceChars
 
-parseString :: GenParser Char a String
-parseString = do char '"'
-                 s <- many (escapedChar <|> noneOf "\"\\")
-                 char '"'
-                 return s
+spaceOrComment = many $ (oneOf whitespaceChars >> return ()) <|> (parseLineComment >> return ())
+
+symbolChar = noneOf $ commentChar : namespaceChar : "\"()0123456789" ++ whitespaceChars
+
+stringLiteral :: GenParser Char a String
+stringLiteral = (do char '"'
+                    s <- many (escapedChar <|> noneOf "\"\\")
+                    char '"'
+                    return s) <?> "string literal"
 
 escapedChar :: GenParser Char a Char
 escapedChar = do char '\\'
@@ -136,39 +104,89 @@ escapedChar = do char '\\'
                                _ -> c
 
 -- Semantics
+
 parseModuleDecl :: GenParser Char a (ModuleID, [ModuleID], String, SourcePos)
-parseModuleDecl =
-    do (TSymbol ["module"] : TSymbol name : xs) <- parseList
-       rest <- getInput
-       pos <- getPosition
-       case xs of
-         [TList (TSymbol ["import"] : importSyms)] ->
-             return (name, mapMaybe symbolPath importSyms, rest, pos)
-         [] -> return (name, [], rest, pos)
-         _ -> fail $ "Not an import form: " ++ show xs
+parseModuleDecl = do
+  (name, imports) <- listOf $ do
+                       symbol ["module"]
+                       name <- anySymbol
+                       imports <- option [] $ listOf $ do
+                                    symbol ["import"]
+                                    many anySymbol
+                       return (name, imports)
+  rest <- getInput
+  pos <- getPosition
+  return (name, imports, rest, pos)
+
+parseBody pos syn = do
+  setPosition pos
+  ds <- many (definition syn)
+  eof
+  i' <- getState
+  return (concat ds, i')
 
 mkNS :: [String] -> Name
 mkNS [x] = UN x
 mkNS (x:xs) = NS (UN x) xs
 
-parseDef :: SyntaxInfo -> IParser [PDecl]
-parseDef syn = do
-  (TSymbol ["def"] : TSymbol name : ty : args : body) <- parseList
+definition :: SyntaxInfo -> IParser [PDecl]
+definition syn = do
   fc <- pfc
+  (name, ty, args, body) <-
+      listOf $ do
+        symbol ["def"]
+        name <- anySymbol
+        ty <- expr
+        args <- listOf (many anySymbol)
+        body <- many expr
+        return (name, ty, args, body)
   let iname = mkNS (reverse name)
-  return [PTy syn fc [] iname (mkTerm fc ty)]
---          PClauses fc [] iname [PClause fc iname ]]
+      with = []
+      whereblock = []
+      applied = PApp fc (PRef fc iname) $
+                map ((PExp 1 False) . (PRef fc)) (map (mkNS . reverse) args)
+  return [PTy syn fc [] iname ty,
+          PClauses fc [] iname [PClause fc iname applied with (last body) whereblock]]
 
-mkTerm :: FC -> SExpr -> PTerm
-mkTerm fc (TList (x:xs))     = PApp fc (mkTerm fc x) (map ((PExp 1 False) . (mkTerm fc)) $ xs)
-mkTerm fc (TSymbol ["_"])    = Placeholder
-mkTerm fc (TSymbol ['?':xs]) = PMetavar $ UN xs
-mkTerm fc (TSymbol name)     = PRef fc (mkNS $ reverse name)
-mkTerm _  (TString str)      = PConstant $ Str str
-mkTerm _  (TChar char)       = PConstant $ Ch char
--- TODO: Prevent loss of precision here
-mkTerm _  (TInteger i)       = PConstant $ I $ fromInteger i
-mkTerm _  (TRational i)      = PConstant $ Fl $ fromRational i
+-- TODO: Lexical lookup of special values
+-- TODO: Avoid excessive use of try
+expr :: GenParser Char s PTerm
+expr = (try $ fmap PConstant constant)
+   <|> try metavar
+   <|> (try (symbol ["Set"]) >> return PSet)
+   <|> (try (symbol ["_"])   >> return Placeholder)
+   <|> try (pfc >>= \fc ->
+                (symbol ["unit"] >> return (PTrue fc))
+            <|> (symbol ["_|_"]  >> return (PFalse fc))
+            <|> (symbol ["refl"] >> return (PRefl fc)))
+   <|> (try reference)
+   <|> try eq
+   <|> application
+
+eq :: GenParser Char s PTerm
+eq = do
+  fc <- pfc
+  listOf $ do
+       symbol ["="]
+       x <- expr
+       y <- expr
+       return $ PEq fc x y
+
+application :: GenParser Char s PTerm
+application = do
+  fc <- pfc
+  listOf $ do
+    f <- expr
+    xs <- many expr
+    return $ PApp fc f (map (PExp 1 False) xs)
+
+metavar = spaceOrComment >> (fmap (PMetavar . UN . concat) $ char '?' >> anySymbol)
+
+reference :: GenParser Char s PTerm
+reference = do
+  fc <- pfc
+  name <- anySymbol
+  return $ PRef fc (mkNS $ reverse name)
 
 importParser :: ImportParser
 importParser =
