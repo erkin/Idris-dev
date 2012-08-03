@@ -11,8 +11,7 @@ import Idris.Error
 import Idris.Delaborate
 import Idris.Compiler
 import Idris.Prover
-import Idris.ParserCommon
-import Idris.Parser
+import Idris.Loader
 import Idris.Coverage
 import Paths_idris
 
@@ -76,7 +75,7 @@ processInput cmd orig inputs
                                  return (Just inputs)
                 Right Reload -> do put (orig { idris_options = idris_options i })
                                    clearErr
-                                   mods <- mapM (\m -> loadModule m pImportBlock pDeclSet) inputs  
+                                   mods <- mapM (\m -> loadModule m) inputs
                                    return (Just inputs)
                 Right Edit -> do edit fn orig
                                  return (Just inputs)
@@ -102,7 +101,7 @@ edit f orig
          liftIO $ system cmd
          clearErr
          put (orig { idris_options = idris_options i })
-         loadModule f pImportBlock pDeclSet
+         loadModule f
          iucheck
          return ()
    where getEditor env | Just ed <- lookup "EDITOR" env = ed

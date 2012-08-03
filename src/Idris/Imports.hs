@@ -9,14 +9,18 @@ import System.FilePath
 import System.Directory
 import Control.Monad.State
 
-data IFileType = IDR FilePath | LIDR FilePath | IBC FilePath IFileType 
+data IFileType = IDR FilePath | LIDR FilePath | BITL FilePath | IBC FilePath IFileType 
     deriving Eq
 
 srcPath :: FilePath -> FilePath
-srcPath fp = let (n, ext) = splitExtension fp in
-                 case ext of
-                    ".idr" -> fp
-                    _ -> fp ++ ".idr"
+srcPath fp = case takeExtension fp of
+               ".idr"  -> fp
+               _       -> fp ++ ".idr"
+
+bitlSrcPath :: FilePath -> FilePath
+bitlSrcPath fp = case takeExtension fp of
+                   ".bitl"  -> fp
+                   _        -> fp ++ ".bitl"
 
 lsrcPath :: FilePath -> FilePath
 lsrcPath fp = let (n, ext) = splitExtension fp in
@@ -47,20 +51,24 @@ findImport :: [FilePath] -> FilePath -> FilePath -> IO IFileType
 findImport []     ibcsd fp = fail $ "Can't find import " ++ fp
 findImport (d:ds) ibcsd fp = do let fp_full = d ++ "/" ++ fp
                                 ibcp <- ibcPathWithFallback ibcsd fp_full
-                                let idrp = srcPath fp_full
+                                let idrp  = srcPath fp_full
+                                let bitlp = bitlSrcPath fp_full
                                 let lidrp = lsrcPath fp_full
-                                ibc <- doesFileExist ibcp
+                                ibc  <- doesFileExist ibcp
                                 idr  <- doesFileExist idrp
+                                bitl <- doesFileExist bitlp
                                 lidr <- doesFileExist lidrp
 --                              when idr $ putStrLn $ idrp ++ " ok"
 --                              when lidr $ putStrLn $ lidrp ++ " ok"
 --                              when ibc $ putStrLn $ ibcp ++ " ok"
                                 let isrc = if lidr
                                            then LIDR lidrp
-                                           else IDR idrp
+                                           else if bitl
+                                                then BITL bitlp
+                                                else IDR idrp
                                 if ibc
                                   then return (IBC ibcp isrc)
-                                  else if (idr || lidr) 
+                                  else if (idr || lidr || bitl)
                                        then return isrc
                                        else findImport ds ibcsd fp
 

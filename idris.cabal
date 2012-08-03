@@ -60,8 +60,9 @@ Executable     idris
                               Core.CaseTree, Core.Constraints,
 
                               Idris.AbsSyntax, Idris.AbsSyntaxTree,
-                              Idris.Parser, Idris.REPL,
-                              Idris.REPLParser, Idris.ElabDecls, Idris.Error,
+                              Idris.ParserCommon, Idris.Parser, Idris.LispParser,
+                              Idris.Loader, Idris.REPL, Idris.REPLParser,
+                              Idris.ElabDecls, Idris.Error,
                               Idris.Delaborate, Idris.Primitives, Idris.Imports,
                               Idris.Compiler, Idris.Prover, Idris.ElabTerm,
                               Idris.Coverage, Idris.IBC, Idris.Unlit,
