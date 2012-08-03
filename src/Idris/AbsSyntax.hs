@@ -303,6 +303,11 @@ setTypeCase t = do i <- get
                    let opt' = opts { opt_typecase = t }
                    put (i { idris_options = opt' })
 
+toggleLispSyntax :: Idris ()
+toggleLispSyntax = do
+  s <- get
+  put $ s { lisp_syntax = not $ lisp_syntax s }
+
 
 -- For inferring types of things
 

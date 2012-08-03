@@ -78,7 +78,8 @@ data IState = IState { tt_ctxt :: Context,
                        hide_list :: [(Name, Maybe Accessibility)],
                        default_access :: Accessibility,
                        ibc_write :: [IBCWrite],
-                       compiled_so :: Maybe String
+                       compiled_so :: Maybe String,
+                       lisp_syntax :: Bool
                      }
 
 primDefs = [UN "unsafePerformIO", UN "mkLazyForeign", UN "mkForeign", UN "FalseElim"]
@@ -109,7 +110,7 @@ idrisInit = IState initContext [] [] emptyContext emptyContext emptyContext
                    emptyContext emptyContext emptyContext emptyContext 
                    emptyContext emptyContext emptyContext
                    [] "" defaultOpts 6 [] [] [] [] [] [] [] [] []
-                   Nothing Nothing Nothing [] [] [] Hidden [] Nothing
+                   Nothing Nothing Nothing [] [] [] Hidden [] Nothing False
 
 -- The monad for the main REPL - reading and processing files and updating 
 -- global state (hence the IO inner monad).
@@ -127,6 +128,7 @@ data Command = Quit   | Help | Eval PTerm | Check PTerm | TotCheck Name
              | Info Name  | DebugInfo Name
              | Search PTerm
              | SetOpt Opt | UnsetOpt Opt
+             | ToggleLisp
              | NOP
 
 data Opt = Filename String

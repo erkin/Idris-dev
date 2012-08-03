@@ -36,13 +36,16 @@ parseLineComment =
         (newline >> return ()) <|> eof
         return text) <?> "comment"
 
-constant :: GenParser Char a Const
-constant = spaceOrComment >>
-         (   fmap Ch charLiteral
-         <|> fmap Str stringLiteral
-         -- TODO: Prevent loss of precision here
-         <|> fmap (Fl . fromRational) parseRational
-         <|> fmap (I  . fromIntegral) parseInteger)
+constant :: GenParser Char a PTerm
+constant = do
+  fc <- pfc
+  spaceOrComment
+  (    fmap (PConstant . Ch) charLiteral
+   <|> fmap (PConstant . Str) stringLiteral
+   -- TODO: Prevent loss of precision here
+   <|> fmap (PConstant . Fl . fromRational) parseRational)
+   <|> (parseInteger >>= \i -> return $ PApp fc (PRef fc (UN "fromInteger"))
+                                             [pexp $ PConstant $ I $ fromInteger i])
 
 parseRational = (try parseFloat <|> try parseRatio) <?> "rational literal"
 parseInteger = (try hexLiteral <|> try parseDec) <?> "integer literal"
@@ -144,24 +147,29 @@ definition syn = do
       with = []
       whereblock = []
       applied = PApp fc (PRef fc iname) $
-                map ((PExp 1 False) . (PRef fc)) (map (mkNS . reverse) args)
+                map (pexp . (PRef fc)) (map (mkNS . reverse) args)
   return [PTy syn fc [] iname ty,
           PClauses fc [] iname [PClause fc iname applied with (last body) whereblock]]
 
 -- TODO: Lexical lookup of special values
 -- TODO: Avoid excessive use of try
 expr :: GenParser Char s PTerm
-expr = (try $ fmap PConstant constant)
+expr = try constant
    <|> try metavar
-   <|> (try (symbol ["Set"]) >> return PSet)
-   <|> (try (symbol ["_"])   >> return Placeholder)
-   <|> try (pfc >>= \fc ->
-                (symbol ["unit"] >> return (PTrue fc))
-            <|> (symbol ["_|_"]  >> return (PFalse fc))
-            <|> (symbol ["refl"] >> return (PRefl fc)))
+   <|> (try $ do fc <- pfc; symbol ["_|_"]  >> return (PFalse fc))
+   <|> (try $ do fc <- pfc; symbol ["unit"] >> return (PTrue fc))
+   <|> (try $ do fc <- pfc; symbol ["refl"] >> return (PRefl fc))
+   <|> (try                (symbol ["Set"]) >> return PSet)
+   <|> (try                (symbol ["_"])   >> return Placeholder)
    <|> (try reference)
    <|> try eq
    <|> application
+
+fullExpr :: GenParser Char s PTerm
+fullExpr = do e <- expr
+              spaceOrComment
+              eof
+              return e
 
 eq :: GenParser Char s PTerm
 eq = do
@@ -178,7 +186,7 @@ application = do
   listOf $ do
     f <- expr
     xs <- many expr
-    return $ PApp fc f (map (PExp 1 False) xs)
+    return $ PApp fc f (map pexp xs)
 
 metavar = spaceOrComment >> (fmap (PMetavar . UN . concat) $ char '?' >> anySymbol)
 

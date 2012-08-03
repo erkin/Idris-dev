@@ -280,6 +280,8 @@ process fn (UnsetOpt ShowImpl)   = setImpShow False
 process fn (SetOpt _) = iputStrLn "Not a valid option"
 process fn (UnsetOpt _) = iputStrLn "Not a valid option"
 
+process fn ToggleLisp = toggleLispSyntax
+
 
 classInfo :: ClassInfo -> Idris ()
 classInfo ci = do iputStrLn "Methods:\n"
