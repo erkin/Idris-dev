@@ -57,13 +57,14 @@ parseTac i = runParser (do t <- pTactic defaultSyntax
                            eof
                            return t) i "(proof)"
 
+parseName x = case span (/='.') x of
+                (x, "") -> [x]
+                (x, '.':y) -> x : parseName y
+
 pHeader :: IParser ModuleID
 pHeader = try (do reserved "module"; i <- identifier; option ';' (lchar ';')
                   return (parseName i))
      <|> return []
-  where parseName x = case span (/='.') x of
-                            (x, "") -> [x]
-                            (x, '.':y) -> x : parseName y
 
 push_indent :: IParser ()
 push_indent = do pos <- getPosition
@@ -156,9 +157,9 @@ pImportBlock = do whiteSpace
 
 pImport :: IParser ModuleID
 pImport = do reserved "import"
-             f <- sepBy identifier (char '.')
+             f <- identifier
              option ';' (lchar ';')
-             return f
+             return (parseName f)
 
 pFullExpr :: SyntaxInfo -> IParser PTerm
 pFullExpr syn 
