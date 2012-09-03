@@ -132,7 +132,7 @@ mkNS :: [String] -> Name
 mkNS [x] = UN x
 mkNS (x:xs) = NS (UN x) xs
 
-definition :: SyntaxInfo -> IParser [PDecl]
+definition :: SyntaxInfo -> GenParser Char s [PDecl]
 definition syn = do
   fc <- pfc
   (name, ty, args, body) <-
@@ -196,7 +196,7 @@ reference = do
   name <- anySymbol
   return $ PRef fc (mkNS $ reverse name)
 
-importParser :: ImportParser
+importParser :: ImportParser s
 importParser =
     do i <- getInput
        p <- getPosition

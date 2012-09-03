@@ -10,7 +10,7 @@ type ModuleID = [String]
 type IParser = GenParser Char IState
 type ProgParser = SourcePos -> SyntaxInfo -> IParser ([PDecl], IState)
 --                           module    imports     code    start
-type ImportParser = IParser (ModuleID, [ModuleID], String, SourcePos)
+type ImportParser s = GenParser Char s (ModuleID, [ModuleID], String, SourcePos)
 
 pfc :: GenParser a s FC
 pfc = do s <- getPosition
