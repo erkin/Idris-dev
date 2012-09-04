@@ -5,6 +5,7 @@ import Core.TT
 import IRTS.Lang
 import IRTS.Simplified
 import IRTS.Bytecode
+import IRTS.CodegenCommon
 import IRTS.CodegenC
 import IRTS.Defunctionalise
 import Paths_idris

@@ -5,6 +5,7 @@ module IRTS.CodegenC where
 import IRTS.Bytecode
 import IRTS.Lang
 import IRTS.Simplified
+import IRTS.CodegenCommon
 import Core.TT
 import Paths_idris
 
@@ -16,11 +17,9 @@ import System.Directory
 import System.Environment
 import Control.Monad
 
-data DbgLevel = NONE | DEBUG | TRACE
-
 codegenC :: [(Name, SDecl)] ->
             String -> -- output file name
-            Bool ->   -- generate executable if True, only .o if False 
+            OutputType ->
             [FilePath] -> -- include files
             String -> -- extra compiler flags
             DbgLevel ->
