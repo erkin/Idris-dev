@@ -237,33 +237,41 @@ toLLVMExp m f b s (LCase exp alts)
            False -> do ctor <- L.buildStructGEP b value 1 "constructorPtr"
                        tagPtr <- L.buildStructGEP b ctor 0 "tagPtr"
                        tag <- L.buildLoad b tagPtr "tag"
-                       switch <- L.buildSwitch b tag defaultCase $ fromIntegral $
-                                 case defaultAlt of
-                                   Just _  -> 1 - length cases
-                                   Nothing -> length cases
+                       switch <- L.buildSwitch b tag defaultCase $ fromIntegral caseCount
                        argArray <- L.buildStructGEP b ctor 2 "argArrayPtr"
                        results <-
-                           mapM (\alt -> case alt of
-                                           LConCase tag _ vars body -> do
-                                             bindings <-
-                                                 mapM (\(name, idx) -> do
-                                                         L.buildInBoundsGEP b argArray
-                                                              [L.constInt L.int32Type (fromIntegral tag) True]
-                                                              (show name))
-                                                      $ zip vars [0..]
-                                             (block, value) <-
-                                                 buildCaseBlock endBlock m f (s ++ bindings) body
-                                             L.addCase switch
-                                                       (L.constInt L.int32Type (fromIntegral tag) True)
-                                                       block
-                                             return (block, value)) cases
+                           mapM (\(LConCase tag _ vars body) -> do
+                                   bindings <-
+                                       mapM (\(name, idx) -> do
+                                               L.buildInBoundsGEP b argArray
+                                                    [L.constInt L.int32Type (fromIntegral tag) True]
+                                                    (show name))
+                                            $ zip vars [0..]
+                                   (block, value) <- buildCaseBlock endBlock m f (s ++ bindings) body
+                                   L.addCase switch (L.constInt L.int32Type (fromIntegral tag) True) block
+                                   return (block, value)) cases
                        L.positionAtEnd b endBlock
                        vt <- idrValueTy m
                        phi <- L.buildPhi b vt "caseResult"
                        L.addIncoming phi results
                        return phi
            -- Constant case
-           True -> undefined
+           True -> do primPtr <- L.buildStructGEP b value 1 "primPtr"
+                      case (\(LConstCase const _) -> const) $ head cases of
+                        I _ -> do
+                          intPtr <- L.buildBitCast b primPtr (L.pointerType L.int32Type 0) "intPtr"
+                          switch <- L.buildSwitch b intPtr defaultCase $ fromIntegral caseCount
+                          results <-
+                              mapM (\(LConstCase (I const) body) -> do
+                                      (block, value) <- buildCaseBlock endBlock m f s body
+                                      L.addCase switch (L.constInt L.int32Type (fromIntegral const) True) block
+                                      return (block, value)) cases
+                          L.positionAtEnd b endBlock
+                          vt <- idrValueTy m
+                          phi <- L.buildPhi b vt "caseResult"
+                          L.addIncoming phi results
+                          return phi
+                        _ -> undefined
 toLLVMExp m f b s (LConst const)
     = case const of
         I i   -> buildInt   m b $ L.constInt L.int32Type (fromIntegral i) True
