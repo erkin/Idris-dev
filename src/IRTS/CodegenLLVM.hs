@@ -223,6 +223,9 @@ toLLVMExp m f b s (LCase exp alts)
                               LDefaultCase exp -> (fst accum, Just exp)
                               _                -> (alt : fst accum, snd accum))
                        ([], Nothing) alts
+         let caseCount = case defaultAlt of
+                           Just _  -> length cases - 1 -- Default case is treated specially
+                           Nothing -> length cases
          value <- toLLVMExp m f b s exp
          endBlock <- L.appendBasicBlock f "caseEnd"
          (defaultCase, defaultVal) <- maybe (buildCaseFailBlock m endBlock f)
