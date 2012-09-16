@@ -157,30 +157,29 @@ buildCaseFail m f
 
 buildAlt :: L.Module -> L.Value -> [L.Value] -> L.Value -> LAlt -> IO (L.BasicBlock, L.BasicBlock, L.Value)
 buildAlt m f s _ (LDefaultCase body)
-    = trace "whatdefault" $ L.withBuilder $ \b -> do
+    = L.withBuilder $ \b -> do
         entry <- L.appendBasicBlock f "default"
         L.positionAtEnd b entry
         result <- toLLVMExp' m f b s body
         exit <- L.getInsertBlock b
         return (entry, exit, result)
 buildAlt m f s ctorPtr (LConCase _ _ argNames body)
-    = trace "Building an alt" $ L.withBuilder $ \b -> do
+    = L.withBuilder $ \b -> do
         entry <- L.appendBasicBlock f "alt"
         L.positionAtEnd b entry
         args <- mapM (\(name, idx) -> do
-                        L.buildInBoundsGEP b ctorPtr
-                             [ L.constInt L.int32Type 0 True
-                             , L.constInt L.int32Type 2 True
-                             , L.constInt L.int32Type idx True]
-                             $ show name)
+                        argPtr <- L.buildInBoundsGEP b ctorPtr
+                                  [ L.constInt L.int32Type 0 True
+                                  , L.constInt L.int32Type 2 True
+                                  , L.constInt L.int32Type idx True
+                                  ] ""
+                        L.buildLoad b argPtr $ show name)
                      $ zip argNames [0..]
-        trace "Alt entry point built" $ return ()
         result <- toLLVMExp' m f b (s ++ args) body
         exit <- L.getInsertBlock b
-        trace "Alt exit point built" $ return ()
         return (entry, exit, result)
 buildAlt m f s _ (LConstCase _ body)
-    = trace "whatconst" $ L.withBuilder $ \b -> do
+    = L.withBuilder $ \b -> do
         entry <- L.appendBasicBlock f "alt"
         L.positionAtEnd b entry
         result <- toLLVMExp' m f b s body
