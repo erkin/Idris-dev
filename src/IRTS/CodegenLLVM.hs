@@ -11,8 +11,8 @@ import Core.TT
 import qualified LLVM.Wrapper.Core as L
 import qualified LLVM.Wrapper.BitWriter as L
 
-import Data.Maybe
 import Foreign.Ptr
+import Debug.Trace
 
 fovm :: FilePath -> IO ()
 fovm f = do defs <- parseFOVM f
@@ -33,7 +33,7 @@ codegenLLVM defs out exec incs libs dbg
            OK c -> L.withModule "" $ \m -> do
                         declarePrimitives m
                         mapM_ (toLLVMDecl m . snd) defs
-                        --mapM_ (toLLVMDef m . snd) defs
+                        mapM_ (toLLVMDef m . snd) defs
                         L.writeBitcodeToFile m out
            Error e -> fail $ "Can't happen: Something went wrong in codegenLLVM\n" ++ show e
 
@@ -81,11 +81,12 @@ toLLVMDef :: L.Module -> LDecl -> IO ()
 toLLVMDef m (LConstructor _ _ _) = return ()
 toLLVMDef m (LFun name args exp)
     = L.withBuilder $ \b -> do
+        trace ("Compiling function " ++ (show name)) $ return ()
         f <- L.getNamedFunction m (show name)
         bb <- L.appendBasicBlock f "entry"
         L.positionAtEnd b bb
         params <- L.getParams f
-        value <- toLLVMExp m f b params exp
+        value <- toLLVMExp' m f b params exp
         L.buildRet b value
         return ()
 
@@ -148,24 +149,43 @@ buildStr m b value
          return val
 
 -- TODO: Runtime error
--- TODO: Compiletime warning
-buildCaseFailBlock :: L.Module -> L.BasicBlock -> L.Value -> IO (L.BasicBlock, L.Value)
-buildCaseFailBlock m end f
-    = L.withBuilder $ \b -> do
-        bb <- L.appendBasicBlock f "caseFail"
-        L.positionAtEnd b bb
-        L.buildBr b end
-        vt <- idrValueTy m
-        return (bb, L.getUndef vt)
+buildCaseFail :: L.Module -> L.Value -> IO (L.BasicBlock, L.Value)
+buildCaseFail m f
+    = do bb <- L.appendBasicBlock f "caseFail"
+         vt <- idrValueTy m
+         return (bb, L.getUndef vt)
 
-buildCaseBlock endBlock m f s e
-    = L.withBuilder $ \b -> do
-        bb <- L.appendBasicBlock f "case" -- TODO: Better name
-        L.positionAtEnd b bb
-        value <- toLLVMExp m f b s e
-        L.buildBr b endBlock
-        caseExitBlock <- L.getInsertBlock b
-        return (caseExitBlock, value)
+buildAlt :: L.Module -> L.Value -> [L.Value] -> L.Value -> LAlt -> IO (L.BasicBlock, L.BasicBlock, L.Value)
+buildAlt m f s _ (LDefaultCase body)
+    = trace "whatdefault" $ L.withBuilder $ \b -> do
+        entry <- L.appendBasicBlock f "default"
+        L.positionAtEnd b entry
+        result <- toLLVMExp' m f b s body
+        exit <- L.getInsertBlock b
+        return (entry, exit, result)
+buildAlt m f s ctorPtr (LConCase _ _ argNames body)
+    = trace "Building an alt" $ L.withBuilder $ \b -> do
+        entry <- L.appendBasicBlock f "alt"
+        L.positionAtEnd b entry
+        args <- mapM (\(name, idx) -> do
+                        L.buildInBoundsGEP b ctorPtr
+                             [ L.constInt L.int32Type 0 True
+                             , L.constInt L.int32Type 2 True
+                             , L.constInt L.int32Type idx True]
+                             $ show name)
+                     $ zip argNames [0..]
+        trace "Alt entry point built" $ return ()
+        result <- toLLVMExp' m f b (s ++ args) body
+        exit <- L.getInsertBlock b
+        trace "Alt exit point built" $ return ()
+        return (entry, exit, result)
+buildAlt m f s _ (LConstCase _ body)
+    = trace "whatconst" $ L.withBuilder $ \b -> do
+        entry <- L.appendBasicBlock f "alt"
+        L.positionAtEnd b entry
+        result <- toLLVMExp' m f b s body
+        exit <- L.getInsertBlock b
+        return (entry, exit, result)
 
 foreignToC :: FType -> L.Type
 foreignToC ty = case ty of
@@ -194,6 +214,8 @@ ensureBound m name rty argtys
            True  -> L.addFunction m name $ L.functionType (foreignToC rty) (map foreignToC argtys) False
            False -> return old
 
+toLLVMExp' m f b s e = trace ("Compiling expression " ++ show e) $ toLLVMExp m f b s e
+
 toLLVMExp :: L.Module ->  -- Current module
              L.Value ->   -- Current function
              L.Builder -> -- IR Cursor
@@ -203,11 +225,16 @@ toLLVMExp :: L.Module ->  -- Current module
 toLLVMExp m f b s (LV var)
     = case var of
         Loc level -> return $ s !! level
-        Glob name -> L.getNamedGlobal m (show name)
+        Glob name -> do val <- L.getNamedGlobal m (show name)
+                        if val == nullPtr then fail $ "Undefined global: " ++ (show name) else return val
 -- TODO: Verify consistency of definition of tail call w/ LLVM
 toLLVMExp m f b s (LApp isTail name exps)
     = do callee <- L.getNamedFunction m (show name)
          args <- mapM (toLLVMExp m f b s) exps
+         trace "Callee: " $ return ()
+         L.dumpValue callee
+         trace "Args: " $ return ()
+         mapM_ L.dumpValue args
          call <- L.buildCall b callee args ""
          L.setTailCall call isTail
          return call
@@ -217,65 +244,60 @@ toLLVMExp m f b s (LLet name value body)
 toLLVMExp m f b s (LCon tag _ exps)
     = mapM (toLLVMExp m f b s) exps >>= buildCon m b tag
 toLLVMExp m f b s (LCase exp alts)
-    = do let (cases, defaultAlt) =
+    = do let (alts, defaultAlt) =
                  foldl (\accum alt ->
                             case alt of
-                              LDefaultCase exp -> (fst accum, Just exp)
+                              LDefaultCase exp -> (fst accum, Just alt)
                               _                -> (alt : fst accum, snd accum))
                        ([], Nothing) alts
          let caseCount = case defaultAlt of
-                           Just _  -> length cases - 1 -- Default case is treated specially
-                           Nothing -> length cases
-         value <- toLLVMExp m f b s exp
-         endBlock <- L.appendBasicBlock f "caseEnd"
-         (defaultCase, defaultVal) <- maybe (buildCaseFailBlock m endBlock f)
-                                            (buildCaseBlock endBlock m f s) defaultAlt
-         case any (\alt -> case alt of
-                             LConCase _ _ _ _ -> False
-                             LConstCase _ _ -> True) cases of
-           -- Constructor case
-           False -> do ctor <- L.buildStructGEP b value 1 "constructorPtr"
-                       tagPtr <- L.buildStructGEP b ctor 0 "tagPtr"
-                       tag <- L.buildLoad b tagPtr "tag"
-                       switch <- L.buildSwitch b tag defaultCase $ fromIntegral caseCount
-                       argArray <- L.buildStructGEP b ctor 2 "argArrayPtr"
-                       results <-
-                           mapM (\(LConCase tag _ vars body) -> do
-                                   bindings <-
-                                       mapM (\(name, idx) -> do
-                                               L.buildInBoundsGEP b argArray
-                                                    [L.constInt L.int32Type (fromIntegral tag) True]
-                                                    (show name))
-                                            $ zip vars [0..]
-                                   (block, value) <- buildCaseBlock endBlock m f (s ++ bindings) body
-                                   L.addCase switch (L.constInt L.int32Type (fromIntegral tag) True) block
-                                   return (block, value)) cases
-                       L.positionAtEnd b endBlock
-                       vt <- idrValueTy m
-                       phi <- L.buildPhi b vt "caseResult"
-                       L.addIncoming phi results
-                       return phi
-           -- Constant case
-           True -> do primPtr <- L.buildStructGEP b value 1 "primPtr"
-                      case (\(LConstCase const _) -> const) $ head cases of
-                        I _ -> do
-                          intPtr <- L.buildBitCast b primPtr (L.pointerType L.int32Type 0) "intPtr"
-                          switch <- L.buildSwitch b intPtr defaultCase $ fromIntegral caseCount
-                          results <-
-                              mapM (\(LConstCase (I const) body) -> do
-                                      (block, value) <- buildCaseBlock endBlock m f s body
-                                      L.addCase switch (L.constInt L.int32Type (fromIntegral const) True) block
-                                      return (block, value)) cases
-                          L.positionAtEnd b endBlock
-                          vt <- idrValueTy m
-                          phi <- L.buildPhi b vt "caseResult"
-                          L.addIncoming phi results
-                          return phi
-                        _ -> undefined
+                           Just _  -> length alts - 1 -- Default case is treated specially
+                           Nothing -> length alts
+         value <- toLLVMExp' m f b s exp
+         trace "Value compiled: " $ return ()
+         L.dumpValue value
+         ctorPtr <- L.buildStructGEP b value 1 ""
+         trace "Building alts..." $ return ()
+         builtAlts <- mapM (buildAlt m f s ctorPtr) alts
+         trace "Alts compiled" $ return ()
+         (defaultEntry, defaultExit, defaultVal) <-
+             case defaultAlt of
+               Just alt -> buildAlt m f s ctorPtr alt
+               Nothing  -> do (block, val) <- buildCaseFail m f; return (block, block, val)
+         trace "Default compiled" $ return ()
+         switch <- case (head alts) of
+                   LConCase _ _ _ _ ->
+                       do tagPtr <- L.buildStructGEP b ctorPtr 0 ""
+                          tag <- L.buildLoad b tagPtr "tag"
+                          s <- L.buildSwitch b tag defaultEntry (fromIntegral caseCount)
+                          mapM_ (uncurry $ L.addCase s)
+                                $ map (\(LConCase ctorTag _ _ _, entry) ->
+                                           (L.constInt L.int32Type (fromIntegral ctorTag) True, entry))
+                                      $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
+                          return s
+                   LConstCase (I _) _ ->
+                       do intPtr <- L.buildBitCast b ctorPtr L.int32Type ""
+                          int <- L.buildLoad b intPtr ""
+                          s <- L.buildSwitch b int defaultEntry (fromIntegral caseCount)
+                          mapM_ (uncurry $ L.addCase s)
+                                $ map (\(LConstCase (I i) _, entry) ->
+                                           (L.constInt L.int32Type (fromIntegral i) True, entry))
+                                      $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
+                          return s
+         endBlock <- L.appendBasicBlock f "endCase"
+         mapM_ (\(exitBlock, _, _) -> do
+                  L.positionAtEnd b exitBlock
+                  L.buildBr b endBlock) ((defaultEntry, defaultExit, defaultVal):builtAlts)
+         L.positionAtEnd b endBlock
+         vty <- idrValueTy m
+         phi <- L.buildPhi b vty "caseResult"
+         L.addIncoming phi $ map (\(_, exit, value) -> (exit, value)) builtAlts
+         L.addIncoming phi [(defaultVal, defaultExit)]
+         return phi
 toLLVMExp m f b s (LConst const)
     = case const of
         I i   -> buildInt   m b $ L.constInt L.int32Type (fromIntegral i) True
-        Fl f  -> buildFloat m b $ L.constReal L.floatType $ realToFrac f
+        Fl f  -> buildFloat m b $ L.constReal L.doubleType $ realToFrac f
         Ch c  -> buildInt   m b $ L.constInt L.int32Type (fromIntegral $ fromEnum c) True
         Str s -> buildStr   m b $ L.constString s True
 toLLVMExp m f b s (LForeign lang ftype name args)
@@ -285,7 +307,7 @@ toLLVMExp m f b s (LForeign lang ftype name args)
                                         idrVal <- toLLVMExp m f b s e
                                         idrToNative b fty idrVal)
                                      args
-                     L.buildCall b ffun argVals "foreignVal" >>= cToIdr m b ftype
+                     L.buildCall b ffun argVals "" >>= cToIdr m b ftype
 toLLVMExp m f b s (LOp prim exps)
     = do args <- mapM (toLLVMExp m f b s) exps
          case prim of
