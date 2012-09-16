@@ -322,6 +322,33 @@ toLLVMExp p m f b s (SOp prim vars)
            LFLe -> fcmp args L.FPOLE
            LFGt -> fcmp args L.FPOGT
            LFGe -> fcmp args L.FPOGE
+           LStrConcat ->
+               do x <- idrToNative b FString $ args !! 0
+                  y <- idrToNative b FString $ args !! 1
+                  xlen <- L.buildCall b (strlen p) [x] ""
+                  ylen <- L.buildCall b (strlen p) [y] ""
+                  sum <- L.buildAdd b xlen ylen ""
+                  destlen <- L.buildAdd b sum (L.constInt L.int64Type 1 True) ""
+                  mem <- buildAlloc p b destlen
+                  L.buildCall b (strcpy p) [mem, x] ""
+                  L.buildCall b (strcat p) [mem, y] ""
+                  buildStr p b mem
+           LIntStr -> -- 2^31 is 10 digits, so 10 chars + 1 null byte
+               do mem <- buildAlloc p b $ L.constInt L.int64Type 11 True
+                  arg <- idrToNative b FInt $ args !! 0
+                  fmt <- L.buildGlobalStringPtr b "%d" ""
+                  L.buildCall b (sprintf p) [mem, fmt, arg] ""
+                  buildStr p b mem
+           LFloatStr -> -- Edwin used 32 here
+               do mem <- buildAlloc p b $ L.constInt L.int64Type 32 True
+                  arg <- idrToNative b FDouble $ args !! 0
+                  fmt <- L.buildGlobalStringPtr b "%f" ""
+                  L.buildCall b (sprintf p) [mem, fmt, arg] ""
+                  buildStr p b mem
+           LPrintStr ->
+               do arg <- idrToNative b FString $ args !! 0
+                  L.buildCall b (puts p) [arg] ""
+                  return $ L.getUndef $ L.pointerType (valTy p) 0
            _ -> L.dumpModule m >> (fail $ "Unimplemented primitive operator: " ++ show prim)
     where
       icmp args op
