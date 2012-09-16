@@ -32,69 +32,79 @@ stringTypeID = 3
 unitTypeID = 4
 ptrTypeID = 5
 
-declarePrimitives :: L.Module -> IO ()
-declarePrimitives m
-    = do L.addFunction m "malloc" $ L.functionType (L.pointerType L.int8Type 0)
-                                    [L.int64Type] False
-         conTy <- L.structCreateNamed "constructor"
-         valTy <- L.structCreateNamed "value"
+data Prims = Prims { alloc   :: L.Value
+                   , strlen  :: L.Value
+                   , strcpy  :: L.Value
+                   , strcat  :: L.Value
+                   , sprintf :: L.Value
+                   , puts    :: L.Value
+                   , conTy   :: L.Type
+                   , valTy   :: L.Type
+                   }
+
+declarePrimitives :: L.Module -> IO Prims
+declarePrimitives m -- TODO: GC
+    = do al <- L.addFunction m "malloc" $ L.functionType (L.pointerType L.int8Type 0)
+                                          [L.int64Type] False
+         slen <- L.addFunction m "strlen" $ L.functionType L.int64Type [L.pointerType L.int8Type 0] False
+         cpy <- L.addFunction m "strcpy" $ L.functionType (L.pointerType L.int8Type 0)
+                                           [L.pointerType L.int8Type 0, L.pointerType L.int8Type 0] False
+         cat <- L.addFunction m "strcat" $ L.functionType (L.pointerType L.int8Type 0)
+                                           [L.pointerType L.int8Type 0, L.pointerType L.int8Type 0] False
+         spf <- L.addFunction m "sprintf" $ L.functionType L.int32Type [ L.pointerType L.int8Type 0
+                                                                       , L.pointerType L.int8Type 0] True
+         put <- L.addFunction m "puts" $ L.functionType L.int32Type [L.pointerType L.int8Type 0] True
+         con <- L.structCreateNamed "constructor"
+         val <- L.structCreateNamed "value"
          -- TODO: Is arity actually needed here?
          --                     Tag          Arity        Args
-         L.structSetBody conTy [L.int32Type, L.int32Type, L.arrayType (L.pointerType valTy 0) 0] False
+         L.structSetBody con [L.int32Type, L.int32Type, L.arrayType (L.pointerType val 0) 0] False
          --                     Type         Value
-         L.structSetBody valTy [L.int32Type, conTy] False
-         return () -- TODO: GC
+         L.structSetBody val [L.int32Type, con] False
+         return $ Prims al slen cpy cat spf put con val
 
-idrConTy :: L.Module -> IO L.Type
-idrConTy m = L.getTypeByName m "constructor"
+idrFuncTy :: Prims -> Int -> L.Type
+idrFuncTy p n = L.functionType (L.pointerType (valTy p) 0) (replicate n $ L.pointerType (valTy p) 0) False
 
-idrValueTy :: L.Module -> IO L.Type
-idrValueTy m = L.getTypeByName m "value"
+llname :: Name -> String
+llname n = "_idris_" ++ (show n)
 
-idrFuncTy :: L.Module -> Int -> IO L.Type
-idrFuncTy m n = idrValueTy m >>= \vt ->
-                return $ L.functionType (L.pointerType vt 0) (replicate n $ L.pointerType vt 0) False
-
-toLLVMDecl :: L.Module -> SDecl -> IO ()
-toLLVMDecl m (SFun name args _ _)
-    = do ty <- idrFuncTy m $ length args
-         f <- L.addFunction m (show name) ty
+toLLVMDecl :: Prims -> L.Module -> SDecl -> IO ()
+toLLVMDecl p m (SFun name args _ _)
+    = do f <- L.addFunction m (llname name) $ idrFuncTy p $ length args
          ps <- L.getParams f
          mapM (uncurry L.setValueName) $ zip ps (map show args)
          return ()
 
 
-toLLVMDef :: L.Module -> SDecl -> IO ()
-toLLVMDef m (SFun name args _ exp)
+toLLVMDef :: Prims -> L.Module -> SDecl -> IO ()
+toLLVMDef prims m (SFun name args _ exp)
     = L.withBuilder $ \b -> do
-        trace ("Compiling function " ++ (show name)) $ return ()
-        f <- L.getNamedFunction m (show name)
+        f <- L.getNamedFunction m (llname name)
         bb <- L.appendBasicBlock f "entry"
         L.positionAtEnd b bb
         params <- L.getParams f
-        value <- toLLVMExp' m f b params exp
+        value <- toLLVMExp prims m f b params exp
         L.buildRet b value
         return ()
 
-buildAlloc :: L.Module -> L.Builder -> L.Value -> IO L.Value
-buildAlloc m b bytes
-    = do malloc <- L.getNamedFunction m "malloc" -- TODO: GC
-         L.buildCall b malloc [bytes] ""
+buildAlloc :: Prims -> L.Builder -> L.Value -> IO L.Value
+buildAlloc prims b bytes
+    = L.buildCall b (alloc prims) [bytes] ""
 
-buildVal :: L.Module -> L.Builder -> Int -> IO L.Value
-buildVal m b argCount
-    = do valSize <- idrValueTy m >>= L.sizeOf
+buildVal :: Prims -> L.Builder -> Int -> IO L.Value
+buildVal prims b argCount
+    = do valSize <- L.sizeOf (valTy prims)
          ptrSize <- L.sizeOf (L.pointerType L.int8Type 0)
-         mem <- buildAlloc m b (L.constAdd valSize
+         mem <- buildAlloc prims b (L.constAdd valSize
                                      (L.constMul ptrSize
                                            (L.constInt L.int64Type
                                                  (fromIntegral $ argCount) True)))
-         destTy <- idrValueTy m >>= \t -> return $ L.pointerType t 0
-         L.buildPointerCast b mem destTy ""
+         L.buildPointerCast b mem (L.pointerType (valTy prims) 0) ""
 
-buildCon :: L.Module -> L.Builder -> Int -> [L.Value] -> IO L.Value
-buildCon m b tag args
-    = do val <- buildVal m b $ length args
+buildCon :: Prims -> L.Builder -> Int -> [L.Value] -> IO L.Value
+buildCon prims b tag args
+    = do val <- buildVal prims b $ length args
          valTyPtr <- L.buildStructGEP b val 0 "typePtr"
          L.buildStore b (L.constInt L.int32Type conTypeID True) valTyPtr
          conPtr <- L.buildStructGEP b val 1 "constructorPtr"
@@ -111,46 +121,46 @@ buildCon m b tag args
                  L.buildStore b arg place) $ zip args [0..]
          return val
 
-buildInt :: L.Module -> L.Builder -> L.Value -> IO L.Value
-buildInt m b value
-    = do val <- buildVal m b 0
+buildInt :: Prims -> L.Builder -> L.Value -> IO L.Value
+buildInt prims b value
+    = do val <- buildVal prims b 0
          con <- L.buildStructGEP b val 1 ""
          intPtr <- L.buildPointerCast b con (L.pointerType L.int32Type 0) ""
          L.buildStore b value intPtr
          return val
 
-buildFloat :: L.Module -> L.Builder -> L.Value -> IO L.Value
-buildFloat m b value
-    = do val <- buildVal m b 0
+buildFloat :: Prims -> L.Builder -> L.Value -> IO L.Value
+buildFloat prims b value
+    = do val <- buildVal prims b 0
          con <- L.buildStructGEP b val 1 ""
          floatPtr <- L.buildPointerCast b con (L.pointerType L.doubleType 0) ""
          L.buildStore b value floatPtr
          return val
 
-buildStr :: L.Module -> L.Builder -> L.Value -> IO L.Value
-buildStr m b value
-    = do val <- buildVal m b 0
+buildStr :: Prims -> L.Builder -> L.Value -> IO L.Value
+buildStr prims b value
+    = do val <- buildVal prims b 0
          con <- L.buildStructGEP b val 1 ""
-         strPtr <- L.buildPointerCast b con (L.pointerType L.int8Type 0) ""
+         strPtr <- L.buildPointerCast b con (L.pointerType (L.pointerType L.int8Type 0) 0) ""
          L.buildStore b value strPtr
          return val
 
 -- TODO: Runtime error
-buildCaseFail :: L.Module -> L.Value -> IO (L.BasicBlock, L.Value)
-buildCaseFail m f
+buildCaseFail :: Prims -> L.Value -> IO (L.BasicBlock, L.Value)
+buildCaseFail prims f
     = do bb <- L.appendBasicBlock f "caseFail"
-         vt <- idrValueTy m
-         return (bb, L.getUndef (L.pointerType vt 0))
+         return (bb, L.getUndef $ L.pointerType (valTy prims) 0)
 
-buildAlt :: L.Module -> L.Value -> [L.Value] -> L.Value -> SAlt -> IO (L.BasicBlock, L.BasicBlock, L.Value)
-buildAlt m f s _ (SDefaultCase body)
+buildAlt :: Prims -> L.Module -> L.Value -> [L.Value] -> L.Value -> SAlt ->
+            IO (L.BasicBlock, L.BasicBlock, L.Value)
+buildAlt p m f s _ (SDefaultCase body)
     = L.withBuilder $ \b -> do
         entry <- L.appendBasicBlock f "default"
         L.positionAtEnd b entry
-        result <- toLLVMExp' m f b s body
+        result <- toLLVMExp p m f b s body
         exit <- L.getInsertBlock b
         return (entry, exit, result)
-buildAlt m f s ctorPtr (SConCase _ _ _ argNames body)
+buildAlt p m f s ctorPtr (SConCase _ _ _ argNames body)
     = L.withBuilder $ \b -> do
         entry <- L.appendBasicBlock f "alt"
         L.positionAtEnd b entry
@@ -162,14 +172,14 @@ buildAlt m f s ctorPtr (SConCase _ _ _ argNames body)
                                   ] ""
                         L.buildLoad b argPtr $ show name)
                      $ zip argNames [0..]
-        result <- toLLVMExp' m f b (s ++ args) body
+        result <- toLLVMExp p m f b (s ++ args) body
         exit <- L.getInsertBlock b
         return (entry, exit, result)
-buildAlt m f s _ (SConstCase _ body)
+buildAlt p m f s _ (SConstCase _ body)
     = L.withBuilder $ \b -> do
         entry <- L.appendBasicBlock f "alt"
         L.positionAtEnd b entry
-        result <- toLLVMExp' m f b s body
+        result <- toLLVMExp p m f b s body
         exit <- L.getInsertBlock b
         return (entry, exit, result)
 
@@ -187,11 +197,12 @@ idrToNative b ty v = do ctorPtr <- L.buildStructGEP b v 1 ""
                                    (L.pointerType (foreignToC ty) 0) ""
                         L.buildLoad b primPtr ""
 
-cToIdr :: L.Module -> L.Builder -> FType -> L.Value -> IO L.Value
-cToIdr m b ty v = case ty of
-                    FInt -> buildInt m b v
-                    FString -> buildStr m b v
-                    FDouble -> buildFloat m b v
+cToIdr :: Prims -> L.Builder -> FType -> L.Value -> IO L.Value
+cToIdr prims b ty v
+    = case ty of
+        FInt -> buildInt prims b v
+        FString -> buildStr prims b v
+        FDouble -> buildFloat prims b v
 
 ensureBound :: L.Module -> String -> FType -> [FType] -> IO L.Value
 ensureBound m name rty argtys
@@ -207,32 +218,31 @@ lookupVar m s (Glob name)
          when (val == nullPtr) $ fail $ "Undefined global: " ++ (show name)
          return val
 
-toLLVMExp' m f b s e = trace ("Compiling expression " ++ show e) $ toLLVMExp m f b s e
-
-toLLVMExp :: L.Module ->  -- Current module
+toLLVMExp :: Prims ->
+             L.Module ->  -- Current module
              L.Value ->   -- Current function
              L.Builder -> -- IR Cursor
              [L.Value] -> -- De Bruijn levels
              SExp ->      -- Expression to process
              IO L.Value
-toLLVMExp m f b s (SV v) = lookupVar m s v
+toLLVMExp p m f b s (SV v) = lookupVar m s v
 -- TODO: Verify consistency of definition of tail call w/ LLVM
-toLLVMExp m f b s (SApp isTail name vars)
-    = do callee <- L.getNamedFunction m (show name)
+toLLVMExp p m f b s (SApp isTail name vars)
+    = do callee <- L.getNamedFunction m (llname name)
          when (callee == nullPtr) $ fail $ "Undefined function: " ++ (show name)
          args <- mapM (lookupVar m s) vars
          call <- L.buildCall b callee args ""
          L.setTailCall call isTail
          return call
-toLLVMExp m f b s (SLet name value body)
-    = do v <- toLLVMExp m f b s value
+toLLVMExp p m f b s (SLet name value body)
+    = do v <- toLLVMExp p m f b s value
          case name of
            Glob n -> L.setValueName v (show name)
            Loc _  -> return ()
-         toLLVMExp m f b (s ++ [v]) body
-toLLVMExp m f b s (SCon tag _ vars)
-    = mapM (lookupVar m s) vars >>= buildCon m b tag
-toLLVMExp m f b s (SCase var alts')
+         toLLVMExp p m f b (s ++ [v]) body
+toLLVMExp p m f b s (SCon tag _ vars)
+    = mapM (lookupVar m s) vars >>= buildCon p b tag
+toLLVMExp p m f b s (SCase var alts')
     = do let (alts, defaultAlt) =
                  foldl (\accum alt ->
                             case alt of
@@ -243,13 +253,12 @@ toLLVMExp m f b s (SCase var alts')
                            Just _  -> length alts - 1 -- Default case is treated specially
                            Nothing -> length alts
          value <- lookupVar m s var
-         L.dumpValue value
          ctorPtr <- L.buildStructGEP b value 1 ""
-         builtAlts <- mapM (buildAlt m f s ctorPtr) alts
+         builtAlts <- mapM (buildAlt p m f s ctorPtr) alts
          (defaultEntry, defaultExit, defaultVal) <-
              case defaultAlt of
-               Just alt -> buildAlt m f s ctorPtr alt
-               Nothing  -> do (block, val) <- buildCaseFail m f; return (block, block, val)
+               Just alt -> buildAlt p m f s ctorPtr alt
+               Nothing  -> do (block, val) <- buildCaseFail p f; return (block, block, val)
          switch <- case (head alts) of
                    SConCase _ _ _ _ _ ->
                        do tagPtr <- L.buildStructGEP b ctorPtr 0 ""
@@ -261,7 +270,7 @@ toLLVMExp m f b s (SCase var alts')
                                       $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
                           return s
                    SConstCase (I _) _ ->
-                       do intPtr <- L.buildPointerCast b ctorPtr L.int32Type ""
+                       do intPtr <- L.buildPointerCast b ctorPtr (L.pointerType L.int32Type 0) ""
                           int <- L.buildLoad b intPtr ""
                           s <- L.buildSwitch b int defaultEntry (fromIntegral caseCount)
                           mapM_ (uncurry $ L.addCase s)
@@ -274,26 +283,25 @@ toLLVMExp m f b s (SCase var alts')
                   L.positionAtEnd b exitBlock
                   L.buildBr b endBlock) ((defaultEntry, defaultExit, defaultVal):builtAlts)
          L.positionAtEnd b endBlock
-         vty <- idrValueTy m
-         phi <- L.buildPhi b (L.pointerType vty 0) "caseResult"
+         phi <- L.buildPhi b (L.pointerType (valTy p) 0) "caseResult"
          L.addIncoming phi $ map (\(_, exit, value) -> (value, exit)) builtAlts
          L.addIncoming phi [(defaultVal, defaultExit)]
          return phi
-toLLVMExp m f b s (SConst const)
+toLLVMExp p m f b s (SConst const)
     = case const of
-        I i   -> buildInt   m b $ L.constInt L.int32Type (fromIntegral i) True
-        Fl f  -> buildFloat m b $ L.constReal L.doubleType $ realToFrac f
-        Ch c  -> buildInt   m b $ L.constInt L.int32Type (fromIntegral $ fromEnum c) True
-        Str s -> buildStr   m b $ L.constString s True
-toLLVMExp m f b s (SForeign lang ftype name args)
+        I i   -> buildInt   p b $ L.constInt L.int32Type (fromIntegral i) True
+        Fl f  -> buildFloat p b $ L.constReal L.doubleType $ realToFrac f
+        Ch c  -> buildInt   p b $ L.constInt L.int32Type (fromIntegral $ fromEnum c) True
+        Str s -> L.buildGlobalStringPtr b s "" >>= buildStr p b
+toLLVMExp p m f b s (SForeign lang ftype name args)
     = case lang of
         LANG_C -> do ffun <- ensureBound m name ftype $ map fst args
                      argVals <- mapM (\(fty, v) -> do
                                         idrVal <- lookupVar m s v
                                         idrToNative b fty idrVal)
                                      args
-                     L.buildCall b ffun argVals "" >>= cToIdr m b ftype
-toLLVMExp m f b s (SOp prim vars)
+                     L.buildCall b ffun argVals "" >>= cToIdr p b ftype
+toLLVMExp p m f b s (SOp prim vars)
     = do args <- mapM (lookupVar m s) vars
          case prim of
            LPlus -> binOp args FInt L.buildAdd
@@ -321,15 +329,15 @@ toLLVMExp m f b s (SOp prim vars)
                y <- idrToNative b FInt $ args !! 1
                v <- L.buildICmp b op x y ""
                bool <- L.buildZExt b v (foreignToC FInt) ""
-               cToIdr m b FInt bool
+               cToIdr p b FInt bool
       fcmp args op
           = do x <- idrToNative b FDouble $ args !! 0
                y <- idrToNative b FDouble $ args !! 1
                v <- L.buildFCmp b op x y ""
                bool <- L.buildZExt b v (foreignToC FInt) ""
-               cToIdr m b FInt bool
+               cToIdr p b FInt bool
       binOp args ty f
           = do x <- idrToNative b ty $ args !! 0
                y <- idrToNative b ty $ args !! 1
                v <- f b x y ""
-               cToIdr m b ty v
+               cToIdr p b ty v
