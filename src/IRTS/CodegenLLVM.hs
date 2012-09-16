@@ -242,13 +242,13 @@ toLLVMExp m f b s (LLet name value body)
          toLLVMExp m f b (s ++ [v]) body
 toLLVMExp m f b s (LCon tag _ exps)
     = mapM (toLLVMExp m f b s) exps >>= buildCon m b tag
-toLLVMExp m f b s (LCase exp alts)
+toLLVMExp m f b s (LCase exp alts')
     = do let (alts, defaultAlt) =
                  foldl (\accum alt ->
                             case alt of
                               LDefaultCase exp -> (fst accum, Just alt)
                               _                -> (alt : fst accum, snd accum))
-                       ([], Nothing) alts
+                       ([], Nothing) alts'
          let caseCount = case defaultAlt of
                            Just _  -> length alts - 1 -- Default case is treated specially
                            Nothing -> length alts
