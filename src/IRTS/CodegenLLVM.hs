@@ -297,14 +297,36 @@ toLLVMExp m f b s (SOp prim vars)
            LMinus -> binOp args FInt L.buildSub
            LTimes -> binOp args FInt L.buildMul
            LDiv -> binOp args FInt L.buildSDiv
+           LEq -> icmp args L.IntEQ
+           LLt -> icmp args L.IntSLT
+           LLe -> icmp args L.IntSLE
+           LGt -> icmp args L.IntSGT
+           LGe -> icmp args L.IntSGE
            LFPlus -> binOp args FDouble L.buildFAdd
            LFMinus -> binOp args FDouble L.buildFSub
            LFTimes -> binOp args FDouble L.buildFMul
            LFDiv -> binOp args FDouble L.buildFDiv
+           LFEq -> fcmp args L.FPOEQ
+           LFLt -> fcmp args L.FPOLT
+           LFLe -> fcmp args L.FPOLE
+           LFGt -> fcmp args L.FPOGT
+           LFGe -> fcmp args L.FPOGE
            _ -> L.dumpModule m >> (fail $ "Unimplemented primitive operator: " ++ show prim)
     where
+      icmp args op
+          = do x <- idrToNative b FInt $ args !! 0
+               y <- idrToNative b FInt $ args !! 1
+               v <- L.buildICmp b op x y ""
+               bool <- L.buildZExt b v (foreignToC FInt) ""
+               cToIdr m b FInt bool
+      fcmp args op
+          = do x <- idrToNative b FDouble $ args !! 0
+               y <- idrToNative b FDouble $ args !! 1
+               v <- L.buildFCmp b op x y ""
+               bool <- L.buildZExt b v (foreignToC FInt) ""
+               cToIdr m b FInt bool
       binOp args ty f
           = do x <- idrToNative b ty $ args !! 0
                y <- idrToNative b ty $ args !! 1
-               f b x y ""
-
+               v <- f b x y ""
+               cToIdr m b ty v
