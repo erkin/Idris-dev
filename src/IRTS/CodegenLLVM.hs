@@ -76,7 +76,7 @@ toLLVMDef m (SFun name args _ exp)
 buildAlloc :: L.Module -> L.Builder -> L.Value -> IO L.Value
 buildAlloc m b bytes
     = do malloc <- L.getNamedFunction m "malloc" -- TODO: GC
-         L.buildCall b malloc [bytes] "memory"
+         L.buildCall b malloc [bytes] ""
 
 buildVal :: L.Module -> L.Builder -> Int -> IO L.Value
 buildVal m b argCount
@@ -87,7 +87,7 @@ buildVal m b argCount
                                            (L.constInt L.int64Type
                                                  (fromIntegral $ argCount) True)))
          destTy <- idrValueTy m >>= \t -> return $ L.pointerType t 0
-         L.buildBitCast b mem destTy ""
+         L.buildPointerCast b mem destTy ""
 
 buildCon :: L.Module -> L.Builder -> Int -> [L.Value] -> IO L.Value
 buildCon m b tag args
@@ -112,7 +112,7 @@ buildInt :: L.Module -> L.Builder -> L.Value -> IO L.Value
 buildInt m b value
     = do val <- buildVal m b 0
          con <- L.buildStructGEP b val 1 ""
-         intPtr <- L.buildBitCast b con (L.pointerType L.int32Type 0) "intPtr"
+         intPtr <- L.buildPointerCast b con (L.pointerType L.int32Type 0) ""
          L.buildStore b value intPtr
          return val
 
@@ -120,7 +120,7 @@ buildFloat :: L.Module -> L.Builder -> L.Value -> IO L.Value
 buildFloat m b value
     = do val <- buildVal m b 0
          con <- L.buildStructGEP b val 1 ""
-         floatPtr <- L.buildBitCast b con (L.pointerType L.doubleType 0) "floatPtr"
+         floatPtr <- L.buildPointerCast b con (L.pointerType L.doubleType 0) ""
          L.buildStore b value floatPtr
          return val
 
@@ -128,7 +128,7 @@ buildStr :: L.Module -> L.Builder -> L.Value -> IO L.Value
 buildStr m b value
     = do val <- buildVal m b 0
          con <- L.buildStructGEP b val 1 ""
-         strPtr <- L.buildBitCast b con (L.pointerType L.int8Type 0) "strPtr"
+         strPtr <- L.buildPointerCast b con (L.pointerType L.int8Type 0) ""
          L.buildStore b value strPtr
          return val
 
@@ -180,9 +180,9 @@ foreignToC ty = case ty of
 
 idrToNative :: L.Builder -> FType -> L.Value -> IO L.Value
 idrToNative b ty v = do ctorPtr <- L.buildStructGEP b v 1 ""
-                        primPtr <- L.buildBitCast b ctorPtr
-                                   (L.pointerType (foreignToC ty) 0) "primPtr"
-                        L.buildLoad b primPtr "foreignValue"
+                        primPtr <- L.buildPointerCast b ctorPtr
+                                   (L.pointerType (foreignToC ty) 0) ""
+                        L.buildLoad b primPtr ""
 
 cToIdr :: L.Module -> L.Builder -> FType -> L.Value -> IO L.Value
 cToIdr m b ty v = case ty of
@@ -258,7 +258,7 @@ toLLVMExp m f b s (SCase var alts')
                                       $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
                           return s
                    SConstCase (I _) _ ->
-                       do intPtr <- L.buildBitCast b ctorPtr L.int32Type ""
+                       do intPtr <- L.buildPointerCast b ctorPtr L.int32Type ""
                           int <- L.buildLoad b intPtr ""
                           s <- L.buildSwitch b int defaultEntry (fromIntegral caseCount)
                           mapM_ (uncurry $ L.addCase s)
