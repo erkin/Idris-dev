@@ -32,13 +32,13 @@ codegenC defs out exec incs libs dbg
          d <- getDataDir
          mprog <- readFile (d ++ "/rts/idris_main.c")
          let cout = headers incs ++ debug dbg ++ h ++ cc ++ 
-                     (if exec then mprog else "")
+                     (if (exec == Executable) then mprog else "")
          (tmpn, tmph) <- tempfile
          hPutStr tmph cout
          hFlush tmph
          hClose tmph
          let gcc = "gcc -x c " ++ 
-                     (if exec then "" else " - c ") ++
+                     (if (exec == Executable) then "" else " - c ") ++
                      gccDbg dbg ++
                      " " ++ tmpn ++
                      " `idris --link` `idris --include` " ++ libs ++
