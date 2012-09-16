@@ -27,20 +27,23 @@ codegen defs out exec incs libs dbg
          mprog <- readFile (d ++ "/rts/idris_main.c")
          let cout = headers incs ++ debug dbg ++ h ++ cc ++ 
                      (if (exec == Executable) then mprog else "")
-         (tmpn, tmph) <- tempfile
-         hPutStr tmph cout
-         hFlush tmph
-         hClose tmph
-         let gcc = "gcc -x c " ++ 
-                     (if (exec == Executable) then "" else " - c ") ++
-                     gccDbg dbg ++
-                     " " ++ tmpn ++
-                     " `idris --link` `idris --include` " ++ libs ++
-                     " -lidris_rts -lgmp -o " ++ out
-         -- putStrLn cout
-         exit <- system gcc
-         when (exit /= ExitSuccess) $
-             putStrLn ("FAILURE: " ++ gcc)
+         case exec of
+           Raw -> writeFile out cout
+           _ -> do
+             (tmpn, tmph) <- tempfile
+             hPutStr tmph cout
+             hFlush tmph
+             hClose tmph
+             let gcc = "gcc -x c " ++ 
+                       (if (exec == Executable) then "" else " - c ") ++
+                       gccDbg dbg ++
+                       " " ++ tmpn ++
+                       " `idris --link` `idris --include` " ++ libs ++
+                       " -lidris_rts -lgmp -o " ++ out
+             -- putStrLn cout
+             exit <- system gcc
+             when (exit /= ExitSuccess) $
+                putStrLn ("FAILURE: " ++ gcc)
 
 headers [] = "#include <idris_rts.h>\n#include <idris_stdfgn.h>\n#include<assert.h>\n"
 headers (x : xs) = "#include <" ++ x ++ ">\n" ++ headers xs

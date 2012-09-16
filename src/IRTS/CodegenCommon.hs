@@ -4,7 +4,7 @@ import Core.TT
 import IRTS.Simplified
 
 data DbgLevel = NONE | DEBUG | TRACE deriving Eq
-data OutputType = Assembly | Object | Executable deriving Eq
+data OutputType = Raw | Object | Executable deriving Eq
 
 type Codegen
     = [(Name, SDecl)] -> -- Definitions
