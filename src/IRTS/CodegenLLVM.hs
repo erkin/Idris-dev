@@ -9,18 +9,21 @@ import Core.TT
 
 import qualified LLVM.Wrapper.Core as L
 import qualified LLVM.Wrapper.BitWriter as L
+import qualified LLVM.Wrapper.Analysis as L
 
 import Foreign.Ptr
 import Control.Monad
-import Debug.Trace
 
 codegen :: Codegen
 codegen defs out exec incs libs dbg
     = L.withModule "" $ \m -> do
-        declarePrimitives m
-        mapM_ (toLLVMDecl m . snd) defs
-        mapM_ (toLLVMDef m . snd) defs
-        L.writeBitcodeToFile m out
+        prims <- declarePrimitives m
+        mapM_ (toLLVMDecl prims m . snd) defs
+        mapM_ (toLLVMDef prims m . snd) defs
+        error <- L.verifyModule m
+        case error of
+          Nothing  -> L.writeBitcodeToFile m out
+          Just msg -> fail msg
 
 conTypeID = 0
 intTypeID = 1
