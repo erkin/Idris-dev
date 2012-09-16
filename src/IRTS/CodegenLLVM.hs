@@ -290,7 +290,7 @@ toLLVMExp m f b s (LCase exp alts')
          L.positionAtEnd b endBlock
          vty <- idrValueTy m
          phi <- L.buildPhi b vty "caseResult"
-         L.addIncoming phi $ map (\(_, exit, value) -> (exit, value)) builtAlts
+         L.addIncoming phi $ map (\(_, exit, value) -> (value, exit)) builtAlts
          L.addIncoming phi [(defaultVal, defaultExit)]
          return phi
 toLLVMExp m f b s (LConst const)
