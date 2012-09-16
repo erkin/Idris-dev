@@ -6,7 +6,8 @@ import IRTS.Lang
 import IRTS.Simplified
 import IRTS.Bytecode
 import IRTS.CodegenCommon
-import IRTS.CodegenC
+import qualified IRTS.CodegenC as C
+import qualified IRTS.CodegenLLVM as LLVM
 import IRTS.Defunctionalise
 import Paths_idris
 
@@ -55,7 +56,7 @@ fovm f = do defs <- parseFOVM f
             let checked = checkDefs defuns (toAlist defuns)
 --            print checked
             case checked of
-                 OK c -> codegenC c "a.out" True ["math.h"] "" TRACE
+                 OK c -> C.codegen c "a.out" Executable ["math.h"] "" TRACE
                  Error e -> fail $ show e 
 
 parseFOVM :: FilePath -> IO [(Name, LDecl)]

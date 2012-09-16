@@ -1,6 +1,6 @@
 {-# LANGUAGE CPP #-}
 
-module IRTS.CodegenC where
+module IRTS.CodegenC (codegen) where
 
 import IRTS.Bytecode
 import IRTS.Lang
@@ -17,14 +17,8 @@ import System.Directory
 import System.Environment
 import Control.Monad
 
-codegenC :: [(Name, SDecl)] ->
-            String -> -- output file name
-            OutputType ->
-            [FilePath] -> -- include files
-            String -> -- extra compiler flags
-            DbgLevel ->
-            IO ()
-codegenC defs out exec incs libs dbg
+codegen :: Codegen
+codegen defs out exec incs libs dbg
     = do -- print defs
          let bc = map toBC defs
          let h = concatMap toDecl (map fst bc)

@@ -1,5 +1,5 @@
 {-# LANGUAGE TypeOperators #-}
-module IRTS.CodegenLLVM where
+module IRTS.CodegenLLVM (codegen) where
 
 import IRTS.Bytecode
 import IRTS.Lang
@@ -14,14 +14,8 @@ import Foreign.Ptr
 import Control.Monad
 import Debug.Trace
 
-codegenLLVM :: [(Name, SDecl)] ->
-            String -> -- output file name
-            OutputType ->   -- generate executable if True, only .o if False 
-            [FilePath] -> -- include files
-            String -> -- extra compiler flags
-            DbgLevel ->
-            IO ()
-codegenLLVM defs out exec incs libs dbg
+codegen :: Codegen
+codegen defs out exec incs libs dbg
     = L.withModule "" $ \m -> do
         declarePrimitives m
         mapM_ (toLLVMDecl m . snd) defs
