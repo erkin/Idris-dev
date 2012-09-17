@@ -333,6 +333,19 @@ toLLVMExp p m f b s (SOp prim vars)
                   L.buildCall b (strcpy p) [mem, x] ""
                   L.buildCall b (strcat p) [mem, y] ""
                   buildStr p b mem
+           LStrLen ->
+               do x <- idrToNative b FString $ args !! 0
+                  len <- L.buildCall b (strlen p) [x] ""
+                  i32 <- L.buildTrunc b len L.int32Type ""
+                  buildInt p b i32
+           LIntFloat ->
+               do x <- idrToNative b FInt $ args !! 0
+                  f <- L.buildSIToFP b x L.doubleType ""
+                  buildFloat p b f
+           LFloatInt ->
+               do x <- idrToNative b FInt $ args !! 0
+                  f <- L.buildFPToSI b x L.int32Type ""
+                  buildFloat p b f
            LIntStr -> -- 2^31 is 10 digits, so 10 chars + 1 null byte
                do mem <- buildAlloc p b $ L.constInt L.int64Type 11 True
                   arg <- idrToNative b FInt $ args !! 0
