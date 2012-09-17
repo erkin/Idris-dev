@@ -279,7 +279,7 @@ toLLVMExp p m f b s (SCase var alts')
                                       $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
                           return s
          endBlock <- L.appendBasicBlock f "endCase"
-         mapM_ (\(exitBlock, _, _) -> do
+         mapM_ (\(_, exitBlock, _) -> do
                   L.positionAtEnd b exitBlock
                   L.buildBr b endBlock) ((defaultEntry, defaultExit, defaultVal):builtAlts)
          L.positionAtEnd b endBlock
