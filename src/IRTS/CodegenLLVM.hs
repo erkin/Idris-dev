@@ -37,7 +37,7 @@ data Prims = Prims { alloc   :: L.Value
                    , strcpy  :: L.Value
                    , strcat  :: L.Value
                    , sprintf :: L.Value
-                   , puts    :: L.Value
+                   , printf  :: L.Value
                    , conTy   :: L.Type
                    , valTy   :: L.Type
                    }
@@ -53,7 +53,7 @@ declarePrimitives m -- TODO: GC
                                            [L.pointerType L.int8Type 0, L.pointerType L.int8Type 0] False
          spf <- L.addFunction m "sprintf" $ L.functionType L.int32Type [ L.pointerType L.int8Type 0
                                                                        , L.pointerType L.int8Type 0] True
-         put <- L.addFunction m "puts" $ L.functionType L.int32Type [L.pointerType L.int8Type 0] True
+         pf <- L.addFunction m "sprintf" $ L.functionType L.int32Type [L.pointerType L.int8Type 0] True
          con <- L.structCreateNamed "constructor"
          val <- L.structCreateNamed "value"
          -- TODO: Is arity actually needed here?
@@ -61,7 +61,7 @@ declarePrimitives m -- TODO: GC
          L.structSetBody con [L.int32Type, L.int32Type, L.arrayType (L.pointerType val 0) 0] False
          --                     Type         Value
          L.structSetBody val [L.int32Type, con] False
-         return $ Prims al slen cpy cat spf put con val
+         return $ Prims al slen cpy cat spf pf con val
 
 idrFuncTy :: Prims -> Int -> L.Type
 idrFuncTy p n = L.functionType (L.pointerType (valTy p) 0) (replicate n $ L.pointerType (valTy p) 0) False
@@ -347,10 +347,16 @@ toLLVMExp p m f b s (SOp prim vars)
                   buildStr p b mem
            LPrintStr ->
                do arg <- idrToNative b FString $ args !! 0
-                  L.buildCall b (puts p) [arg] ""
-                  return $ L.getUndef $ L.pointerType (valTy p) 0
+                  buildPrint "%s" [arg]
+           LPrintNum ->
+               do arg <- idrToNative b FInt $ args !! 0
+                  buildPrint "%d" [arg]
            _ -> L.dumpModule m >> (fail $ "Unimplemented primitive operator: " ++ show prim)
     where
+      buildPrint fmt args
+          = do fmtptr <- L.buildGlobalStringPtr b fmt ""
+               r <- L.buildCall b (printf p) (fmtptr:args) ""
+               buildInt p b r
       icmp args op
           = do x <- idrToNative b FInt $ args !! 0
                y <- idrToNative b FInt $ args !! 1
