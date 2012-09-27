@@ -80,7 +80,7 @@ toLLVMDecl p m (SFun name args _ _)
 toLLVMDef :: Prims -> L.Module -> SDecl -> IO ()
 toLLVMDef prims m (SFun name args _ exp)
     = L.withBuilder $ \b -> do
-        f <- L.getNamedFunction m (llname name)
+        f <- fmap (maybe (error "toLLVMDef: impossible") id) $ L.getNamedFunction m (llname name)
         bb <- L.appendBasicBlock f "entry"
         L.positionAtEnd b bb
         params <- L.getParams f
@@ -206,17 +206,18 @@ cToIdr prims b ty v
 
 ensureBound :: L.Module -> String -> FType -> [FType] -> IO L.Value
 ensureBound m name rty argtys
-    = do old <- L.getNamedFunction m name
-         case old == nullPtr of
-           True  -> L.addFunction m name $ L.functionType (foreignToC rty) (map foreignToC argtys) False
-           False -> return old
+    = do maybef <- L.getNamedFunction m name
+         case maybef of
+           Nothing -> L.addFunction m name $ L.functionType (foreignToC rty) (map foreignToC argtys) False
+           Just f -> return f
 
 lookupVar :: L.Module -> [L.Value] -> LVar -> IO L.Value
 lookupVar m s (Loc level) = return $ s !! level
 lookupVar m s (Glob name)
-    = do val <- L.getNamedGlobal m (show name)
-         when (val == nullPtr) $ fail $ "Undefined global: " ++ (show name)
-         return val
+    = do maybeVal <- L.getNamedGlobal m (show name)
+         case maybeVal of
+           Nothing -> fail $ "Undefined global: " ++ (show name)
+           Just val -> return val
 
 toLLVMExp :: Prims ->
              L.Module ->  -- Current module
@@ -228,12 +229,14 @@ toLLVMExp :: Prims ->
 toLLVMExp p m f b s (SV v) = lookupVar m s v
 -- TODO: Verify consistency of definition of tail call w/ LLVM
 toLLVMExp p m f b s (SApp isTail name vars)
-    = do callee <- L.getNamedFunction m (llname name)
-         when (callee == nullPtr) $ fail $ "Undefined function: " ++ (show name)
-         args <- mapM (lookupVar m s) vars
-         call <- L.buildCall b callee args ""
-         L.setTailCall call isTail
-         return call
+    = do maybeCallee <- L.getNamedFunction m (llname name)
+         case maybeCallee of
+           Nothing -> fail $ "Undefined function: " ++ (show name)
+           Just callee -> do
+             args <- mapM (lookupVar m s) vars
+             call <- L.buildCall b callee args ""
+             L.setTailCall call isTail
+             return call
 toLLVMExp p m f b s (SLet name value body)
     = do v <- toLLVMExp p m f b s value
          case name of
