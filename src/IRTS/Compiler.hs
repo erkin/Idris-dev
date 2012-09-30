@@ -28,6 +28,7 @@ genCode codegen f tm
          used <- mapM (allNames []) tmnames
          defsIn <- mkDecls tm (concat used)
          maindef <- irMain tm
+         outty <- outputTy
          let defs = defsIn ++ [(MN 0 "runMain", maindef)]
          -- iputStrLn $ showSep "\n" (map show defs)
          let (nexttag, tagged) = addTags 0 (liftAll defs)
@@ -37,7 +38,7 @@ genCode codegen f tm
          let checked = checkDefs defuns (toAlist defuns)
          case checked of
            OK c -> do -- iputStrLn $ showSep "\n" (map show c)
-                      liftIO $ codegen c f Executable [] "" NONE
+                      liftIO $ codegen c f outty "" NONE
            Error e -> fail $ show e
   where checkMVs = do i <- get
                       case idris_metavars i \\ primDefs of

@@ -15,14 +15,15 @@ import Foreign.Ptr
 import Control.Monad
 
 codegen :: Codegen
-codegen defs out exec incs libs dbg
+codegen defs out exec libs dbg
     = L.withModule "" $ \m -> do
         prims <- declarePrimitives m
         mapM_ (toLLVMDecl prims m . snd) defs
         mapM_ (toLLVMDef prims m . snd) defs
         error <- L.verifyModule m
         case error of
-          Nothing  -> L.writeBitcodeToFile m out
+          Nothing  -> case exec of
+                        Raw -> L.printModuleToFile m out
           Just msg -> L.dumpModule m >> fail msg
 
 conTypeID = 0
@@ -458,6 +459,7 @@ toLLVMExp p m f b vm s (SConst const)
         Fl f  -> buildFloat p b vm $ L.constReal L.doubleType $ realToFrac f
         Ch c  -> buildInt p b $ L.constInt L.int32Type (fromIntegral $ fromEnum c) True
         Str s -> L.buildGlobalStringPtr b s "stringLiteral" >>= buildStr p b vm
+        _ -> return $ L.getUndef $ L.pointerType (valTy p) 0 -- Type values are undefined
 toLLVMExp p m f b vm s (SForeign lang ftype name args)
     = case lang of
         LANG_C -> do ffun <- ensureBound m name ftype $ map fst args

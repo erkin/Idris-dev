@@ -8,6 +8,7 @@ import Core.Evaluate
 import Core.Elaborate hiding (Tactic(..))
 import Core.Typecheck
 import Idris.AbsSyntaxTree
+import IRTS.CodegenCommon
 
 import Paths_idris
 
@@ -217,6 +218,26 @@ setREPL t = do i <- get
                let opts = idris_options i
                let opt' = opts { opt_repl = t }
                put (i { idris_options = opt' })
+
+setLLVM :: Bool -> Idris ()
+setLLVM t = do i <- get
+               let opts = idris_options i
+               let opt' = opts { opt_useLLVM = t }
+               put (i { idris_options = opt' })
+
+useLLVM :: Idris Bool
+useLLVM = do i <- get
+             return (opt_useLLVM (idris_options i))
+
+setOutputTy :: OutputType -> Idris ()
+setOutputTy t = do i <- get
+                   let opts = idris_options i
+                   let opt' = opts { opt_outputTy = t }
+                   put (i { idris_options = opt' })
+
+outputTy :: Idris OutputType
+outputTy = do i <- get
+              return $ opt_outputTy $ idris_options i
 
 verbose :: Idris Bool
 verbose = do i <- get

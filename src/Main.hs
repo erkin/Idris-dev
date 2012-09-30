@@ -27,6 +27,7 @@ import Idris.Error
 
 import IRTS.Lang
 import IRTS.LParser
+import IRTS.CodegenCommon
 
 import Paths_idris
 
@@ -47,6 +48,10 @@ runIdris opts =
        let importdirs = opt getImportDir opts
        let bcs = opt getBC opts
        let vm = opt getFOVM opts
+       let llvm = elem LLVM opts
+       let outputTy = case opt getOutputTy opts of
+                        [] -> Executable
+                        xs -> last xs
 
        when (Ver `elem` opts) $ liftIO showver
        when (Usage `elem` opts) $ liftIO usage
@@ -59,7 +64,7 @@ runIdris opts =
        -- if we have the --fovm flag, drop into the first order VM testing
        case vm of
 	    [] -> return ()
-	    xs -> liftIO $ mapM_ fovm xs 
+	    xs -> liftIO $ mapM_ (fovm llvm outputTy) xs
        -- if we have the --bytecode flag, drop into the bytecode assembler
        case bcs of
 	    [] -> return ()
@@ -68,6 +73,8 @@ runIdris opts =
          [] -> setIBCSubDir ""
          (d:_) -> setIBCSubDir d
        setImportDirs importdirs
+       setLLVM llvm
+       setOutputTy outputTy
        elabPrims
        when (not (NoPrelude `elem` opts)) $ do x <- loadModule "prelude"
                                                return ()
@@ -120,6 +127,10 @@ getImportDir :: Opt -> Maybe String
 getImportDir (ImportDir str) = Just str
 getImportDir _ = Nothing
 
+getOutputTy :: Opt -> Maybe OutputType
+getOutputTy (OutputTy t) = Just t
+getOutputTy _ = Nothing
+
 opt :: (Opt -> Maybe a) -> [Opt] -> [a]
 opt = mapMaybe 
 
@@ -157,6 +168,9 @@ parseArgs ("--ibcsubdir":n:ns)  = liftM (IBCSubDir n : ) (parseArgs ns)
 parseArgs ("-i":n:ns)           = liftM (ImportDir n : ) (parseArgs ns)
 parseArgs ("--bytecode":n:ns)   = liftM (\x -> NoREPL : BCAsm n : x) (parseArgs ns)
 parseArgs ("--fovm":n:ns)       = liftM (\x -> NoREPL : FOVM n : x) (parseArgs ns)
+parseArgs ("--llvm":ns)         = liftM (LLVM : ) (parseArgs ns)
+parseArgs ("-S":ns)             = liftM (OutputTy Raw : ) (parseArgs ns)
+parseArgs ("-c":ns)             = liftM (OutputTy Object : ) (parseArgs ns)
 parseArgs (n:ns)                = liftM (Filename n : ) (parseArgs ns)
 
 ver = showVersion version
@@ -172,12 +186,15 @@ usagemsg = "Idris version " ++ ver ++ "\n" ++
            "Usage: idris [input file] [options]\n" ++
            "Options:\n" ++
            "\t--check           Type check only\n" ++
-           "\t-o [file]         Generate executable\n" ++
+           "\t-o [file]         Specify output filename\n" ++
            "\t-i [dir]          Add directory to the list of import paths\n" ++
            "\t--ibcsubdir [dir] Write IBC files into sub directory\n" ++
            "\t--noprelude       Don't import the prelude\n" ++
            "\t--typeintype      Disable universe checking\n" ++
            "\t--log [level]     Set debugging log level\n" ++
 	   "\t--link            Show library directories and exit (for C linking)\n" ++
-	   "\t--include         Show include directories and exit (for C linking)\n"
+	   "\t--include         Show include directories and exit (for C linking)\n" ++
+           "\t--llvm            Use the LLVM code generation backend\n" ++
+           "\t-S                Do no further compilation of code generator output\n" ++
+           "\t-c                Compile to object files rather than an executable\n"
 

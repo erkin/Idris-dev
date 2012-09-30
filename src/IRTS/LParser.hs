@@ -47,17 +47,18 @@ strlit    = PTok.stringLiteral lexer
 chlit     = PTok.charLiteral lexer
 lchar = lexeme.char
 
-fovm :: FilePath -> IO ()
-fovm f = do defs <- parseFOVM f
-            let (nexttag, tagged) = addTags 0 (liftAll defs)
-            let ctxtIn = addAlist tagged emptyContext
-            let defuns = defunctionalise nexttag ctxtIn
-            putStrLn $ showSep "\n" (map show (toAlist defuns))
-            let checked = checkDefs defuns (toAlist defuns)
---            print checked
-            case checked of
-                 OK c -> C.codegen c "a.out" Executable ["math.h"] "" TRACE
-                 Error e -> fail $ show e 
+fovm :: Bool -> OutputType -> FilePath -> IO ()
+fovm llvm oty f
+    = do defs <- parseFOVM f
+         let (nexttag, tagged) = addTags 0 (liftAll defs)
+             ctxtIn = addAlist tagged emptyContext
+             defuns = defunctionalise nexttag ctxtIn
+         putStrLn $ showSep "\n" (map show (toAlist defuns))
+         let checked = checkDefs defuns (toAlist defuns)
+--       print checked
+         case checked of
+           OK c -> (if llvm then LLVM.codegen else C.codegen) c "a.out" oty "" TRACE
+           Error e -> fail $ show e
 
 parseFOVM :: FilePath -> IO [(Name, LDecl)]
 parseFOVM fname = do -- putStrLn $ "Reading " ++ fname

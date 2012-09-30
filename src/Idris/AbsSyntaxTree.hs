@@ -8,6 +8,7 @@ import Core.Evaluate
 import Core.Elaborate hiding (Tactic(..))
 import Core.Typecheck
 import IRTS.Lang
+import IRTS.CodegenCommon
 import Util.Pretty
 
 import Paths_idris
@@ -30,12 +31,14 @@ data IOption = IOption { opt_logLevel :: Int,
                          opt_errContext :: Bool,
                          opt_repl     :: Bool,
                          opt_verbose  :: Bool,
+                         opt_useLLVM  :: Bool,
+                         opt_outputTy :: OutputType,
                          opt_ibcsubdir :: FilePath,
                          opt_importdirs :: [FilePath]
                        }
     deriving (Show, Eq)
 
-defaultOpts = IOption 0 False False True False False True True "" []
+defaultOpts = IOption 0 False False True False False True True False Executable "" []
 
 -- TODO: Add 'module data' to IState, which can be saved out and reloaded quickly (i.e
 -- without typechecking).
@@ -146,6 +149,8 @@ data Opt = Filename String
          | ImportDir String
          | BCAsm String
          | FOVM String
+         | LLVM
+         | OutputTy OutputType
     deriving Eq
 
 

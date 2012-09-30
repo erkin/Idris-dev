@@ -18,14 +18,14 @@ import System.Environment
 import Control.Monad
 
 codegen :: Codegen
-codegen defs out exec incs libs dbg
+codegen defs out exec libs dbg
     = do -- print defs
          let bc = map toBC defs
          let h = concatMap toDecl (map fst bc)
          let cc = concatMap (uncurry toC) bc
          d <- getDataDir
          mprog <- readFile (d ++ "/rts/idris_main.c")
-         let cout = headers incs ++ debug dbg ++ h ++ cc ++ 
+         let cout = headers ["math.h"] ++ debug dbg ++ h ++ cc ++ 
                      (if (exec == Executable) then mprog else "")
          case exec of
            Raw -> writeFile out cout
