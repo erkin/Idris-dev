@@ -67,6 +67,17 @@ data Prims = Prims { allocCon :: L.Value
                    , primCastBigInt :: L.Value
                    , primCastStrBig :: L.Value
                    , primCastBigStr :: L.Value
+                   , primFExp :: L.Value
+                   , primFLog :: L.Value
+                   , primFSin :: L.Value
+                   , primFCos :: L.Value
+                   , primFTan :: L.Value
+                   , primFASin :: L.Value
+                   , primFACos :: L.Value
+                   , primFATan :: L.Value
+                   , primFSqrt :: L.Value
+                   , primFFloor :: L.Value
+                   , primFCeil :: L.Value
                    , conTy :: L.Type
                    , valTy :: L.Type
                    }
@@ -99,6 +110,18 @@ declarePrimitives m
          stdout' <- L.addGlobal m (L.pointerType L.int8Type 0) "stdout"
          stderr' <- L.addGlobal m (L.pointerType L.int8Type 0) "stderr"
          mapM_ (flip L.setLinkage L.ExternalLinkage) [stdin', stdout', stderr']
+         let fpty = L.functionType L.doubleType [L.doubleType] False
+         exp <- L.addFunction m "llvm.exp.f64" fpty
+         log <- L.addFunction m "llvm.log.f64" fpty
+         sin <- L.addFunction m "llvm.sin.f64" fpty
+         cos <- L.addFunction m "llvm.cos.f64" fpty
+         sqrt <- L.addFunction m "llvm.sqrt.f64" fpty
+         floor <- L.addFunction m "llvm.floor.f64" fpty
+         ceil <- L.addFunction m "ceil" fpty
+         tan <- L.addFunction m "tan" fpty
+         asin <- L.addFunction m "asin" fpty
+         acos <- L.addFunction m "acos" fpty
+         atan <- L.addFunction m "atan" fpty
          let bind name arity = L.addFunction m ("idris_" ++ name)
                                $ L.functionType (L.pointerType val 0)
                                      ((L.pointerType L.int8Type 0)
@@ -164,6 +187,17 @@ declarePrimitives m
                         , primCastBigInt = cbi
                         , primCastStrBig = csb
                         , primCastBigStr = cbs
+                        , primFExp = exp
+                        , primFLog = log
+                        , primFSin = sin
+                        , primFCos = cos
+                        , primFTan = tan
+                        , primFASin = asin
+                        , primFACos = acos
+                        , primFATan = atan
+                        , primFSqrt = sqrt
+                        , primFFloor = floor
+                        , primFCeil = ceil
                         , conTy = con
                         , valTy = val
                         }
@@ -450,6 +484,8 @@ toLLVMExp p m f b vm s (SOp prim vars)
                              cToIdr p b ty vm v
              binPr prim = L.buildCall b (prim p) [vm, args !! 0, args !! 1] ""
              unPr prim  = L.buildCall b (prim p) [vm, args !! 0] ""
+             fpPr prim  = do x <- idrToNative b FDouble $ args !! 0
+                             L.buildCall b (primFExp p) [x] ""
          case prim of
            LPlus  -> binOp FInt L.buildAdd
            LMinus -> binOp FInt L.buildSub
@@ -495,6 +531,17 @@ toLLVMExp p m f b vm s (SOp prim vars)
            LStrCons   -> unPr primStrCons
            LStrIndex  -> unPr primStrIndex
            LStrRev    -> unPr primStrRev
+           LFExp      -> fpPr primFExp
+           LFLog      -> fpPr primFLog
+           LFSin      -> fpPr primFSin
+           LFCos      -> fpPr primFCos
+           LFTan      -> fpPr primFTan
+           LFASin     -> fpPr primFASin
+           LFACos     -> fpPr primFACos
+           LFATan     -> fpPr primFATan
+           LFSqrt     -> fpPr primFSqrt
+           LFFloor    -> fpPr primFFloor
+           LFCeil     -> fpPr primFCeil
            LPrintNum -> do fmt <- L.buildGlobalStringPtr b "%d" ""
                            num <- idrToNative b FInt $ args !! 0
                            stdout <- L.buildLoad b (primStdout p) ""
@@ -516,4 +563,5 @@ toLLVMExp p m f b vm s (SOp prim vars)
                do x <- idrToNative b FDouble $ args !! 0
                   f <- L.buildFPToSI b x L.int32Type ""
                   buildFloat p b vm f
+           LNoOp -> return $ L.getUndef $ L.pointerType (valTy p) 0
            _ -> L.dumpModule m >> (fail $ "Unimplemented primitive operator: " ++ show prim)
