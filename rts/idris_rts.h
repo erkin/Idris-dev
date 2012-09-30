@@ -13,13 +13,15 @@ typedef enum {
     CON, INT, BIGINT, FLOAT, STRING, UNIT, PTR, FWD
 } ClosureType;
 
+typedef struct Closure *VAL;
+
 typedef struct {
     int tag;
     int arity;
-    void* args;
+    VAL args[];
 } con;
 
-typedef struct {
+typedef struct Closure {
     ClosureType ty;
     union {
         con c;
@@ -29,8 +31,6 @@ typedef struct {
         void* ptr;
     } info;
 } Closure;
-
-typedef Closure* VAL;
 
 typedef struct {
     VAL* valstack;
@@ -110,7 +110,7 @@ VAL MKPTR(VM* vm, void* ptr);
 VAL MKCON(VM* vm, VAL cl, int tag, int arity, ...);
 
 #define SETTAG(x, a) (x)->info.c.tag = (a)
-#define SETARG(x, i, a) ((VAL*)((x)->info.c.args))[i] = ((VAL)(a))
+#define SETARG(x, i, a) ((x)->info.c.args)[i] = ((VAL)(a))
 
 void PROJECT(VM* vm, VAL r, int loc, int arity); 
 void SLIDE(VM* vm, int args);
