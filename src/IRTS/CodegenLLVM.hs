@@ -232,7 +232,8 @@ toLLVMDef prims m (SFun name args _ exp)
         L.positionAtEnd b bb
         params <- L.getParams f
         value <- toLLVMExp prims m f b (head params) (tail params) exp
-        L.buildRet b value
+        unreachable <- L.isUnreachable value
+        unless unreachable $ void $ L.buildRet b value
         broken <- L.verifyFunction f
         when broken $ do
           L.dumpValue f
@@ -586,4 +587,4 @@ toLLVMExp p m f b vm s (SError str)
          stderr <- L.buildLoad b (primStderr p) ""
          L.buildCall b (fprintf p) [stderr, fmt, str] ""
          L.buildCall b (abort p) [] ""
-         return $ L.getUndef $ L.pointerType (valTy p) 0
+         L.buildUnreachable b
