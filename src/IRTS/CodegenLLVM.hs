@@ -35,6 +35,7 @@ ptrTypeID = 5
 
 data Prims = Prims { allocCon :: L.Value
                    , fprintf :: L.Value
+                   , abort :: L.Value
                    , primReadStr :: L.Value
                    , primStdin :: L.Value
                    , primStdout :: L.Value
@@ -107,6 +108,7 @@ declarePrimitives m
                        [L.pointerType L.int8Type 0, L.pointerType L.int8Type 0] False
          fpf <- L.addFunction m "fprintf"
                 $ L.functionType L.int32Type [L.pointerType L.int8Type 0, L.pointerType L.int8Type 0] True
+         abort' <- L.addFunction m "abort" $ L.functionType L.voidType [] False
          stdin'  <- L.addGlobal m (L.pointerType L.int8Type 0) "stdin"
          stdout' <- L.addGlobal m (L.pointerType L.int8Type 0) "stdout"
          stderr' <- L.addGlobal m (L.pointerType L.int8Type 0) "stderr"
@@ -155,6 +157,7 @@ declarePrimitives m
          cbs <- bind "castBigStr" 1
          return $ Prims { allocCon = alloc
                         , fprintf = fpf
+                        , abort = abort'
                         , primReadStr = rstr
                         , primStdin = stdin'
                         , primStdout = stdout'
@@ -567,3 +570,10 @@ toLLVMExp p m f b vm s (SOp prim vars)
                   buildFloat p b vm f
            LNoOp -> return $ L.getUndef $ L.pointerType (valTy p) 0
            _ -> L.dumpModule m >> (fail $ "Unimplemented primitive operator: " ++ show prim)
+toLLVMExp p m f b vm s (SError str)
+    = do fmt <- L.buildGlobalStringPtr b "%s" ""
+         str <- L.buildGlobalStringPtr b str "stringLiteral"
+         stderr <- L.buildLoad b (primStderr p) ""
+         L.buildCall b (fprintf p) [stderr, fmt, str] ""
+         L.buildCall b (abort p) [] ""
+         return $ L.getUndef $ L.pointerType (valTy p) 0
