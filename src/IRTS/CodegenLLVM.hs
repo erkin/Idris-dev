@@ -351,16 +351,17 @@ buildAlt p m f vm s ctorPtr (SConCase _ _ _ argNames body)
 foreignToC :: FType -> L.Type
 foreignToC ty = case ty of
                   FInt -> L.int32Type
-                  FString -> L.pointerType L.int8Type 0
                   FUnit -> L.voidType
-                  FPtr -> L.pointerType L.int8Type 0
                   FDouble -> L.doubleType
+                  FString -> L.pointerType L.int8Type 0
+                  FPtr -> L.pointerType L.int8Type 0
 
 idrToNative :: L.Builder -> FType -> L.Value -> IO L.Value
 idrToNative b ty v
     = case ty of
         FInt -> do shifted <- L.buildPtrToInt b v L.int32Type ""
                    L.buildAShr b shifted (L.constInt L.int32Type 1 True) ""
+        FAny -> return v
         _ -> do ctorPtr <- L.buildStructGEP b v 1 ""
                 primPtr <- L.buildPointerCast b ctorPtr (L.pointerType (foreignToC ty) 0) ""
                 L.buildLoad b primPtr ""
@@ -373,6 +374,8 @@ cToIdr prims b ty vm v
         FString -> buildStr   prims b vm v
         FDouble -> buildFloat prims b vm v
         FPtr    -> buildPtr   prims b vm v
+        FUnit   -> buildUnit prims b vm
+        FAny    -> return v
 
 ensureBound :: L.Module -> String -> FType -> [FType] -> IO L.Value
 ensureBound m name rty argtys
