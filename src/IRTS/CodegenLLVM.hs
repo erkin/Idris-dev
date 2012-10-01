@@ -233,6 +233,13 @@ toLLVMDef prims m (SFun name args _ exp)
         params <- L.getParams f
         value <- toLLVMExp prims m f b (head params) (tail params) exp
         L.buildRet b value
+        broken <- L.verifyFunction f
+        when broken $ do
+          L.dumpValue f
+          err <- L.verifyModule m
+          case err of
+            Just msg -> fail $ "CodegenLLVM: Internal error: Broken function: " ++ msg
+            Nothing -> error "CodegenLLVM.toLLVMDef: impossible"
         return ()
 
 buildVal :: Prims -> L.Builder -> L.Value -> Int -> IO L.Value
