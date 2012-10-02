@@ -476,7 +476,11 @@ toLLVMExp p m f b vm s (SCase var alts')
            Nothing -> return ()
          L.positionAtEnd b endBlock
          phi <- L.buildPhi b (L.pointerType (valTy p) 0) "caseResult"
-         L.addIncoming phi $ map (\(_, exit, value) -> (value, exit)) builtAlts
+         results <- foldM (\accum (_, exit, value) -> do
+                             unreachable <- L.isUnreachable value
+                             return $ if unreachable then accum else (value, exit):accum)
+                    [] builtAlts
+         L.addIncoming phi results
          case (defaultExit, defaultVal) of
            (Just exit, Just val) -> L.addIncoming phi [(val, exit)]
            _ -> return ()
