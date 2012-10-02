@@ -449,24 +449,21 @@ toLLVMExp p m f b vm s (SCase var alts')
              case defaultAlt of
                Just alt -> fmap (\(a, b, c) -> (a, Just b, Just c)) $ buildAlt p m f vm s ctorPtr alt
                Nothing  -> do block <- buildCaseFail p f; return (block, Nothing, Nothing)
+         let defSwitch value = do
+               s <- L.buildSwitch b value defaultEntry (fromIntegral caseCount)
+               mapM_ (uncurry $ L.addCase s)
+                     $ map (\(alt, entry) -> case alt of
+                                      SConCase _ ctorTag _ _ _ ->
+                                          (L.constInt L.int32Type (fromIntegral ctorTag) True, entry)
+                                      SConstCase (I i) _ ->
+                                          (L.constInt L.int32Type (fromIntegral i) True, entry)
+                                      SConstCase _ _ -> error "Unimplemented case on non-int primitive")
+                           $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
+               return s
          switch <- case (head alts) of
-                   SConCase _ _ _ _ _ ->
-                       do tagPtr <- L.buildStructGEP b ctorPtr 0 ""
-                          tag <- L.buildLoad b tagPtr "tag"
-                          s <- L.buildSwitch b tag defaultEntry (fromIntegral caseCount)
-                          mapM_ (uncurry $ L.addCase s)
-                                $ map (\(SConCase _ ctorTag _ _ _, entry) ->
-                                           (L.constInt L.int32Type (fromIntegral ctorTag) True, entry))
-                                      $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
-                          return s
-                   SConstCase (I _) _ ->
-                       do int <- idrToNative b FInt value
-                          s <- L.buildSwitch b int defaultEntry (fromIntegral caseCount)
-                          mapM_ (uncurry $ L.addCase s)
-                                $ map (\(SConstCase (I i) _, entry) ->
-                                           (L.constInt L.int32Type (fromIntegral i) True, entry))
-                                      $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
-                          return s
+                   SConCase _ _ _ _ _ -> L.buildStructGEP b ctorPtr 0 "" >>=
+                                         flip (L.buildLoad b) "" >>= defSwitch
+                   SConstCase (I _) _ -> idrToNative b FInt value >>= defSwitch
          endBlock <- L.appendBasicBlock f "endCase"
          mapM_ (\(_, exitBlock, _) -> do
                   L.positionAtEnd b exitBlock
