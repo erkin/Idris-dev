@@ -311,11 +311,22 @@ buildUnit p b vm
          L.buildStore b (L.constInt L.int32Type unitTypeID True) typeid
          return val
 
--- TODO: Runtime error
-buildCaseFail :: Prims -> L.Value -> IO (L.BasicBlock, L.Value)
+buildError :: Prims -> L.Builder -> String -> IO L.Value
+buildError p b message
+    = do fmt <- L.buildGlobalStringPtr b "%s" ""
+         str <- L.buildGlobalStringPtr b message "errorMessage"
+         stderr <- L.buildLoad b (primStderr p) ""
+         L.buildCall b (fprintf p) [stderr, fmt, str] ""
+         L.buildCall b (abort p) [] ""
+         L.buildUnreachable b
+
+buildCaseFail :: Prims -> L.Value -> IO L.BasicBlock
 buildCaseFail prims f
-    = do bb <- L.appendBasicBlock f "caseFail"
-         return (bb, L.getUndef $ L.pointerType (valTy prims) 0)
+    = L.withBuilder $ \b -> do
+        bb <- L.appendBasicBlock f "caseFail"
+        L.positionAtEnd b bb
+        buildError prims b "Inexhaustive case"
+        return bb
 
 buildAlt :: Prims -> L.Module -> L.Value -> L.Value -> [L.Value] -> L.Value -> SAlt ->
             IO (L.BasicBlock, L.BasicBlock, L.Value)
@@ -435,8 +446,8 @@ toLLVMExp p m f b vm s (SCase var alts')
          builtAlts <- mapM (buildAlt p m f vm s ctorPtr) alts
          (defaultEntry, defaultExit, defaultVal) <-
              case defaultAlt of
-               Just alt -> buildAlt p m f vm s ctorPtr alt
-               Nothing  -> do (block, val) <- buildCaseFail p f; return (block, block, val)
+               Just alt -> fmap (\(a, b, c) -> (a, Just b, Just c)) $ buildAlt p m f vm s ctorPtr alt
+               Nothing  -> do block <- buildCaseFail p f; return (block, Nothing, Nothing)
          switch <- case (head alts) of
                    SConCase _ _ _ _ _ ->
                        do tagPtr <- L.buildStructGEP b ctorPtr 0 ""
@@ -458,11 +469,16 @@ toLLVMExp p m f b vm s (SCase var alts')
          endBlock <- L.appendBasicBlock f "endCase"
          mapM_ (\(_, exitBlock, _) -> do
                   L.positionAtEnd b exitBlock
-                  L.buildBr b endBlock) ((defaultEntry, defaultExit, defaultVal):builtAlts)
+                  L.buildBr b endBlock) builtAlts
+         case defaultExit of
+           Just exitBlock -> L.positionAtEnd b exitBlock >> L.buildBr b endBlock >> return ()
+           Nothing -> return ()
          L.positionAtEnd b endBlock
          phi <- L.buildPhi b (L.pointerType (valTy p) 0) "caseResult"
          L.addIncoming phi $ map (\(_, exit, value) -> (value, exit)) builtAlts
-         L.addIncoming phi [(defaultVal, defaultExit)]
+         case (defaultExit, defaultVal) of
+           (Just exit, Just val) -> L.addIncoming phi [(val, exit)]
+           _ -> return ()
          return phi
 toLLVMExp p m f b vm s (SConst const)
     = case const of
@@ -581,10 +597,5 @@ toLLVMExp p m f b vm s (SOp prim vars)
                   buildFloat p b vm f
            LNoOp -> return $ L.getUndef $ L.pointerType (valTy p) 0
            _ -> L.dumpModule m >> (fail $ "Unimplemented primitive operator: " ++ show prim)
-toLLVMExp p m f b vm s (SError str)
-    = do fmt <- L.buildGlobalStringPtr b "%s" ""
-         str <- L.buildGlobalStringPtr b str "stringLiteral"
-         stderr <- L.buildLoad b (primStderr p) ""
-         L.buildCall b (fprintf p) [stderr, fmt, str] ""
-         L.buildCall b (abort p) [] ""
-         L.buildUnreachable b
+toLLVMExp p m f b vm s (SError message)
+    = buildError p b message
