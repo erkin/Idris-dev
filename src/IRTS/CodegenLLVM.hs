@@ -325,7 +325,8 @@ buildCaseFail prims f
     = L.withBuilder $ \b -> do
         bb <- L.appendBasicBlock f "caseFail"
         L.positionAtEnd b bb
-        buildError prims b "Inexhaustive case"
+        fname <- L.getValueName f
+        buildError prims b $ "Inexhaustive case in " ++ fname
         return bb
 
 buildAlt :: Prims -> L.Module -> L.Value -> L.Value -> [L.Value] -> L.Value -> SAlt ->
