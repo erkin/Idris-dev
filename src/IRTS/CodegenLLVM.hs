@@ -109,6 +109,7 @@ declarePrimitives m
          fpf <- L.addFunction m "fprintf"
                 $ L.functionType L.int32Type [L.pointerType L.int8Type 0, L.pointerType L.int8Type 0] True
          abort' <- L.addFunction m "abort" $ L.functionType L.voidType [] False
+         L.addFunctionAttr abort' L.NoReturnAttribute
          stdin'  <- L.addGlobal m (L.pointerType L.int8Type 0) "stdin"
          stdout' <- L.addGlobal m (L.pointerType L.int8Type 0) "stdout"
          stderr' <- L.addGlobal m (L.pointerType L.int8Type 0) "stderr"
@@ -125,10 +126,13 @@ declarePrimitives m
          asin <- L.addFunction m "asin" fpty
          acos <- L.addFunction m "acos" fpty
          atan <- L.addFunction m "atan" fpty
-         let bind name arity = L.addFunction m ("idris_" ++ name)
-                               $ L.functionType (L.pointerType val 0)
-                                     ((L.pointerType L.int8Type 0)
-                                      : (replicate arity $ L.pointerType val 0)) False
+         let bind name arity = do
+               f <- L.addFunction m ("idris_" ++ name)
+                    $ L.functionType (L.pointerType val 0)
+                          ((L.pointerType L.int8Type 0)
+                           : (replicate arity $ L.pointerType val 0)) False
+               L.addFunctionAttr f L.NoUnwindAttribute
+               return f
          cis <- bind "castIntStr" 1
          csi <- bind "castStrInt" 1
          cfs <- bind "castFloatStr" 1
