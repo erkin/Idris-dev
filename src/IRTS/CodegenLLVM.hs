@@ -6,17 +6,23 @@ import IRTS.Lang
 import IRTS.Simplified
 import IRTS.CodegenCommon
 import Core.TT
+import Paths_idris
 
 import qualified LLVM.Wrapper.Core as L
 import qualified LLVM.Wrapper.BitWriter as L
 import qualified LLVM.Wrapper.Analysis as L
 
+import System.IO
+import System.Directory (removeFile)
+import System.Process (rawSystem)
+import System.Exit (ExitCode(..))
 import Foreign.Ptr
 import Control.Monad
 
 codegen :: Codegen
-codegen defs out exec libs dbg
+codegen defs out exec flags dbg
     = L.withModule "" $ \m -> do
+        let opt = "-O1"
         prims <- declarePrimitives m
         mapM_ (toLLVMDecl prims m . snd) defs
         mapM_ (toLLVMDef prims m . snd) defs
@@ -24,14 +30,40 @@ codegen defs out exec libs dbg
         case error of
           Nothing  -> case exec of
                         Raw -> L.printModuleToFile m out
+                        Object -> buildObj m opt out
+                        Executable ->
+                            withTmpFile $ \obj -> do
+                                  buildObj m opt obj
+                                  rtsDir <- fmap (++ "/rts") getDataDir
+                                  exit <- rawSystem "gcc" [ opt, obj
+                                                          , "-L" ++ rtsDir
+                                                          , "-lidris_rts", "-lgmp", "-lm"
+                                                          , "-lidris_llvm_main"
+                                                          , "-o", out
+                                                          ]
+                                  when (exit /= ExitSuccess) $ fail "FAILURE: Linking"
           Just msg -> L.dumpModule m >> fail msg
+    where
+      writeBc m opt dest
+          = do L.writeBitcodeToFile m dest
+               exit <- rawSystem "opt" ["-std-compile-opts", "-std-link-opts", opt, "-o", dest, dest]
+               when (exit /= ExitSuccess) $ fail "FAILURE: Bitcode optimization"
+      buildObj m opt dest
+          = withTmpFile $ \bitcode -> do
+              writeBc m opt bitcode
+              exit <- rawSystem "llc" ["-filetype=obj", opt, "-o", dest, bitcode]
+              when (exit /= ExitSuccess) $ fail "FAILURE: Object file output"
 
-conTypeID = 0
-intTypeID = 1
-floatTypeID = 2
-stringTypeID = 3
-unitTypeID = 4
-ptrTypeID = 5
+      withTmpFile :: (FilePath -> IO a) -> IO a
+      withTmpFile f = do
+        (path, handle) <- tempfile
+        hClose handle
+        result <- f path
+        removeFile path
+        return result
+
+data TypeID = ConTy | IntTy | FloatTy | StringTy | UnitTy | PtrTy
+            deriving (Eq, Enum, Show)
 
 data Prims = Prims { allocCon :: L.Value
                    , fprintf :: L.Value
@@ -248,16 +280,20 @@ toLLVMDef prims m (SFun name args _ exp)
             Nothing -> error "CodegenLLVM.toLLVMDef: impossible"
         return ()
 
-buildVal :: Prims -> L.Builder -> L.Value -> Int -> IO L.Value
-buildVal prims b vm arity
-    = L.buildCall b (allocCon prims) [vm, L.constInt L.int32Type (fromIntegral arity) True] ""
+buildVal :: Prims -> L.Builder -> L.Value -> TypeID -> Int -> IO (L.Value, L.Value)
+buildVal prims b vm tyid arity
+    = do val <- L.buildCall b (allocCon prims) [vm, L.constInt L.int32Type (fromIntegral arity) True] ""
+         ty <- L.buildStructGEP b val 0 "typePtr"
+         L.buildStore b (L.constInt L.int32Type (fromIntegral $ fromEnum tyid) True) ty
+         con <- L.buildStructGEP b val 1 "constructorPtr"
+         return (val, con)
+
+buildPrim :: Prims -> L.Builder -> L.Value -> TypeID -> IO (L.Value, L.Value)
+buildPrim p b v t = buildVal p b v t 0
 
 buildCon :: Prims -> L.Builder -> L.Value -> Int -> [L.Value] -> IO L.Value
 buildCon prims b vm tag args
-    = do val <- buildVal prims b vm $ length args
-         valTyPtr <- L.buildStructGEP b val 0 "typePtr"
-         L.buildStore b (L.constInt L.int32Type conTypeID True) valTyPtr
-         conPtr <- L.buildStructGEP b val 1 "constructorPtr"
+    = do (val, conPtr) <- buildVal prims b vm ConTy $ length args
          tagPtr <- L.buildStructGEP b conPtr 0 "tagPtr"
          L.buildStore b (L.constInt L.int32Type (fromIntegral tag) True) tagPtr
          arityPtr <- L.buildStructGEP b conPtr 1 "arityPtr"
@@ -281,40 +317,27 @@ buildInt prims b value
 
 buildFloat :: Prims -> L.Builder -> L.Value -> L.Value -> IO L.Value
 buildFloat prims b vm value
-    = do val <- buildVal prims b vm 0
-         typeid <- L.buildStructGEP b val 0 ""
-         L.buildStore b (L.constInt L.int32Type floatTypeID True) typeid
-         con <- L.buildStructGEP b val 1 ""
+    = do (val, con) <- buildPrim prims b vm FloatTy
          floatPtr <- L.buildPointerCast b con (L.pointerType L.doubleType 0) ""
          L.buildStore b value floatPtr
          return val
 
 buildPtr :: Prims -> L.Builder -> L.Value -> L.Value -> IO L.Value
 buildPtr prims b vm value
-    = do val <- buildVal prims b vm 0
-         typeid <- L.buildStructGEP b val 0 ""
-         L.buildStore b (L.constInt L.int32Type ptrTypeID True) typeid
-         con <- L.buildStructGEP b val 1 ""
+    = do (val, con) <- buildPrim prims b vm PtrTy
          ptrPtr <- L.buildPointerCast b con (L.pointerType (L.pointerType L.int8Type 0) 0) ""
          L.buildStore b value ptrPtr
          return val
 
 buildStr :: Prims -> L.Builder -> L.Value -> L.Value -> IO L.Value
 buildStr prims b vm value
-    = do val <- buildVal prims b vm 0
-         typeid <- L.buildStructGEP b val 0 ""
-         L.buildStore b (L.constInt L.int32Type stringTypeID True) typeid
-         con <- L.buildStructGEP b val 1 ""
+    = do (val, con) <- buildPrim prims b vm StringTy
          strPtr <- L.buildPointerCast b con (L.pointerType (L.pointerType L.int8Type 0) 0) ""
          L.buildStore b value strPtr
          return val
 
 buildUnit :: Prims -> L.Builder -> L.Value -> IO L.Value
-buildUnit p b vm
-    = do val <- buildVal p b vm 0
-         typeid <- L.buildStructGEP b val 0 ""
-         L.buildStore b (L.constInt L.int32Type unitTypeID True) typeid
-         return val
+buildUnit p b vm = fmap fst $ buildPrim p b vm UnitTy
 
 buildError :: Prims -> L.Builder -> String -> IO L.Value
 buildError p b message
@@ -468,7 +491,7 @@ toLLVMExp p m f b vm s (SCase var alts')
                return s
          switch <- case (head alts) of
                    SConCase _ _ _ _ _ -> L.buildStructGEP b ctorPtr 0 "" >>=
-                                         flip (L.buildLoad b) "" >>= defSwitch
+                                         flip (L.buildLoad b) "tag" >>= defSwitch
                    SConstCase (I _) _ -> idrToNative b FInt value >>= defSwitch
          endBlock <- L.appendBasicBlock f "endCase"
          mapM_ (\(_, exitBlock, _) -> do
