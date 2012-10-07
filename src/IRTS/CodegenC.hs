@@ -33,7 +33,7 @@ codegen defs out exec libs dbg
              hFlush tmph
              hClose tmph
              let gcc = "gcc -x c " ++ 
-                       (if (exec == Executable) then "" else " - c ") ++
+                       (if (exec == Executable) then "" else "-c ") ++
                        gccDbg dbg ++
                        " " ++ tmpn ++
                        " `idris --link` `idris --include` " ++ libs ++
