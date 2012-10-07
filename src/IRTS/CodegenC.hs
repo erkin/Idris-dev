@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 module IRTS.CodegenC (codegen) where
 
 import IRTS.Bytecode
@@ -234,20 +232,3 @@ doOp v LStdErr [] = v ++ "MKPTR(vm, stderr)"
 
 doOp v LNoOp [x] = ""
 doOp _ _ _ = "FAIL"
-
-tempfile :: IO (FilePath, Handle)
-tempfile = do env <- environment "TMPDIR"
-              let dir = case env of
-                              Nothing -> "/tmp"
-                              (Just d) -> d
-              openTempFile dir "idris"
-
-environment :: String -> IO (Maybe String)
-environment x = catch (do e <- getEnv x
-                          return (Just e))
-#if MIN_VERSION_base(4,6,0)
-                          (\y-> do return (y::SomeException);  return Nothing)  
-#endif
-#if !MIN_VERSION_base(4,6,0)
-                          (\_->  return Nothing)  
-#endif  

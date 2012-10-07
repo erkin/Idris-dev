@@ -22,10 +22,13 @@ import Control.Monad
 codegen :: Codegen
 codegen defs out exec flags dbg
     = L.withModule "" $ \m -> do
-        let opt = "-O1"
+        let opt = "-O3"
         prims <- declarePrimitives m
-        mapM_ (toLLVMDecl prims m . snd) defs
+        decls <- mapM (toLLVMDecl prims m . snd) defs
         mapM_ (toLLVMDef prims m . snd) defs
+        when (exec == Executable) $
+             do mapM (\f -> L.setLinkage f L.InternalLinkage) decls
+                buildMain m (MN 0 "runMain")
         error <- L.verifyModule m
         case error of
           Nothing  -> case exec of
@@ -61,6 +64,25 @@ codegen defs out exec flags dbg
         result <- f path
         removeFile path
         return result
+
+buildMain :: L.Module -> Name -> IO ()
+buildMain m entryPoint
+    = L.withBuilder $ \b -> do
+        initVm <- L.addFunction m "init_vm"
+                  $ L.functionType (L.pointerType L.int8Type 0) [L.int32Type, L.int64Type] False
+        f <- L.addFunction m "main"
+             $ L.functionType L.int32Type
+                   [L.int32Type, L.pointerType (L.pointerType L.int8Type 0) 0] False
+        bb <- L.appendBasicBlock f "entry"
+        L.positionAtEnd b bb
+        vm <- L.buildCall b initVm
+              [L.constInt L.int32Type 4096000 True, L.constInt L.int64Type 2048000 True] ""
+        maybeRunMain <- L.getNamedFunction m (llname entryPoint)
+        case maybeRunMain of
+          Just runMain -> L.buildCall b runMain [vm] ""
+          Nothing -> fail $ "Internal error: missing entry point: " ++ (show entryPoint)
+        L.buildRet b $ L.constInt L.int32Type 0 True
+        return ()
 
 data TypeID = ConTy | IntTy | FloatTy | StringTy | UnitTy | PtrTy
             deriving (Eq, Enum, Show)
@@ -251,17 +273,17 @@ idrFuncTy p n = L.functionType (L.pointerType (valTy p) 0)
 llname :: Name -> String
 llname n = "_idris_" ++ (show n)
 
-toLLVMDecl :: Prims -> L.Module -> SDecl -> IO ()
+toLLVMDecl :: Prims -> L.Module -> SDecl -> IO L.Value
 toLLVMDecl p m (SFun name args _ _)
     = do f <- L.addFunction m (llname name) $ idrFuncTy p $ length args
          unless (name == (MN 0 "runMain")) $ L.setFunctionCallConv f L.Fast
          ps <- L.getParams f
          L.setValueName (head ps) "VM"
          mapM (uncurry L.setValueName) $ zip (tail ps) (map show args)
-         return ()
+         return f
 
 
-toLLVMDef :: Prims -> L.Module -> SDecl -> IO ()
+toLLVMDef :: Prims -> L.Module -> SDecl -> IO L.Value
 toLLVMDef prims m (SFun name args _ exp)
     = L.withBuilder $ \b -> do
         f <- fmap (maybe (error "toLLVMDef: impossible") id) $ L.getNamedFunction m (llname name)
@@ -278,7 +300,7 @@ toLLVMDef prims m (SFun name args _ exp)
           case err of
             Just msg -> fail $ "CodegenLLVM: Internal error: Broken function: " ++ msg
             Nothing -> error "CodegenLLVM.toLLVMDef: impossible"
-        return ()
+        return f
 
 buildVal :: Prims -> L.Builder -> L.Value -> TypeID -> Int -> IO (L.Value, L.Value)
 buildVal prims b vm tyid arity
