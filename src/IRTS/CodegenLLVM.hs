@@ -385,25 +385,26 @@ buildCaseFail prims f
         buildError prims b $ "Inexhaustive case in " ++ fname
         return bb
 
-buildAlt :: Prims -> L.Module -> L.Value -> L.Value -> [L.Value] -> L.Value -> SAlt ->
-            IO (L.BasicBlock, L.BasicBlock, L.Value)
-buildAlt p m f vm s _ (SDefaultCase body)
+buildAlt :: Prims -> L.Module -> L.Value -> L.Value -> [L.Value] -> L.Value -> L.BasicBlock -> L.BasicBlock ->
+            SAlt -> IO (L.BasicBlock, L.Value)
+buildAlt p m f vm s _ end entry (SDefaultCase body)
     = L.withBuilder $ \b -> do
-        entry <- L.appendBasicBlock f "default"
         L.positionAtEnd b entry
         result <- toLLVMExp p m f b vm s body
+        unreachable <- L.isUnreachable result
+        unless unreachable $ void $ L.buildBr b end
         exit <- L.getInsertBlock b
-        return (entry, exit, result)
-buildAlt p m f vm s _ (SConstCase _ body)
+        return (exit, result)
+buildAlt p m f vm s _ end entry (SConstCase _ body)
     = L.withBuilder $ \b -> do
-        entry <- L.appendBasicBlock f "alt"
         L.positionAtEnd b entry
         result <- toLLVMExp p m f b vm s body
+        unreachable <- L.isUnreachable result
+        unless unreachable $ void $ L.buildBr b end
         exit <- L.getInsertBlock b
-        return (entry, exit, result)
-buildAlt p m f vm s ctorPtr (SConCase _ _ _ argNames body)
+        return (exit, result)
+buildAlt p m f vm s ctorPtr end entry (SConCase _ _ _ argNames body)
     = L.withBuilder $ \b -> do
-        entry <- L.appendBasicBlock f "alt"
         L.positionAtEnd b entry
         args <- mapM (\(name, idx) -> do
                         argPtr <- L.buildInBoundsGEP b ctorPtr
@@ -414,8 +415,10 @@ buildAlt p m f vm s ctorPtr (SConCase _ _ _ argNames body)
                         L.buildLoad b argPtr $ show name)
                      $ zip argNames [0..]
         result <- toLLVMExp p m f b vm (s ++ args) body
+        unreachable <- L.isUnreachable result
+        unless unreachable $ void $ L.buildBr b end
         exit <- L.getInsertBlock b
-        return (entry, exit, result)
+        return (exit, result)
 
 foreignToC :: FType -> L.Type
 foreignToC ty = case ty of
@@ -509,10 +512,14 @@ toLLVMExp p m f b vm s (SCase var alts')
                               return $ Just bb
                        _ -> return Nothing
          ctorPtr <- L.buildStructGEP b value 1 ""
-         builtAlts <- mapM (buildAlt p m f vm s ctorPtr) alts
+         altEntryBlocks <- mapM (\_ -> L.appendBasicBlock f "alt") alts
+         endBlock <- L.appendBasicBlock f "endCase"
+         builtAlts <- mapM (uncurry $ buildAlt p m f vm s ctorPtr endBlock) $ zip altEntryBlocks alts
          (defaultEntry, defaultExit, defaultVal) <-
              case defaultAlt of
-               Just alt -> fmap (\(a, b, c) -> (a, Just b, Just c)) $ buildAlt p m f vm s ctorPtr alt
+               Just alt -> do defaultBlock <- L.appendBasicBlock f "default"
+                              fmap (\(a, b) -> (defaultBlock, Just a, Just b))
+                                $ buildAlt p m f vm s ctorPtr endBlock defaultBlock alt
                Nothing  -> do block <- buildCaseFail p f; return (block, Nothing, Nothing)
          let defSwitch value = do
                s <- L.buildSwitch b value defaultEntry (fromIntegral caseCount)
@@ -523,7 +530,7 @@ toLLVMExp p m f b vm s (SCase var alts')
                                       SConstCase (I i) _ ->
                                           (L.constInt L.int32Type (fromIntegral i) True, entry)
                                       SConstCase _ _ -> error "Unimplemented case on non-int primitive")
-                           $ zip alts $ map (\(entry, _, _) -> entry) builtAlts
+                           $ zip alts altEntryBlocks
                return s
          case switchBB of
            Just switchBB ->
@@ -534,22 +541,17 @@ toLLVMExp p m f b vm s (SCase var alts')
                   isInt <- buildIsInt b value
                   L.buildCondBr b isInt defaultEntry switchBB
            Nothing -> idrToNative b FInt value >>= defSwitch
-         endBlock <- L.appendBasicBlock f "endCase"
-         mapM_ (\(_, exitBlock, _) -> do
-                  L.positionAtEnd b exitBlock
-                  L.buildBr b endBlock) builtAlts
-         case defaultExit of
-           Just exitBlock -> L.positionAtEnd b exitBlock >> L.buildBr b endBlock >> return ()
-           Nothing -> return ()
          L.positionAtEnd b endBlock
          phi <- L.buildPhi b (L.pointerType (valTy p) 0) "caseResult"
-         results <- foldM (\accum (_, exit, value) -> do
+         results <- foldM (\accum (exit, value) -> do
                              unreachable <- L.isUnreachable value
                              return $ if unreachable then accum else (value, exit):accum)
                     [] builtAlts
          L.addIncoming phi results
          case (defaultExit, defaultVal) of
-           (Just exit, Just val) -> L.addIncoming phi [(val, exit)]
+           (Just exit, Just val) ->
+               do unreachable <- L.isUnreachable val
+                  unless unreachable $ void $ L.addIncoming phi [(val, exit)]
            _ -> return ()
          return phi
 toLLVMExp p m f b vm s (SConst const)
