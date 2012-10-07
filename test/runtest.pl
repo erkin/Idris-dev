@@ -8,7 +8,7 @@ sub runtest {
     chdir($test);
 
     print "Running $test...";
-    $got = `sh ./run`;
+    $got = `sh ./run @idrOpts`;
     $exp = `cat expected`;
     
     open(OUT,">output");
@@ -59,11 +59,13 @@ if ($#ARGV>=0) {
 $update=0;
 $diff=0;
 $show=0;
+@idrOpts=();
 
 while ($opt=shift(@opts)) {
     if ($opt eq "-u") { $update = 1; }
     if ($opt eq "-d") { $diff = 1; }
     if ($opt eq "-s") { $show = 1; }
+    if ($opt eq "-l") { push(@idrOpts, "--llvm"); }
 }
 
 foreach $test (@tests) {

@@ -1,2 +1,2 @@
 #!/bin/bash
-idris test010.idr -o test010
+idris $@ test010.idr -o test010
