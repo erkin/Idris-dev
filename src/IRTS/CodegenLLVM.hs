@@ -199,7 +199,7 @@ declarePrimitives m
          stl <- bind "strTail" 1
          stc <- bind "strCons" 2
          sti <- bind "strIndex" 2
-         str <- bind "strRev" 2
+         str <- bind "strRev" 1
          bip <- bind "bigPlus" 2
          bim <- bind "bigMinus" 2
          bit <- bind "bigTimes" 2
@@ -622,6 +622,8 @@ toLLVMExp p m f b vm s (SOp prim vars)
            LStrLt     -> binPr primStrlt
            LStrEq     -> binPr primStreq
            LStrLen    -> binPr primStrlen
+           LStrCons   -> binPr primStrCons
+           LStrIndex  -> binPr primStrIndex
            LIntStr    -> unPr primCastIntStr
            LStrInt    -> unPr primCastStrInt
            LFloatStr  -> unPr primCastFloatStr
@@ -632,8 +634,6 @@ toLLVMExp p m f b vm s (SOp prim vars)
            LBigStr    -> unPr primCastBigStr
            LStrHead   -> unPr primStrHead
            LStrTail   -> unPr primStrTail
-           LStrCons   -> unPr primStrCons
-           LStrIndex  -> unPr primStrIndex
            LStrRev    -> unPr primStrRev
            LFExp      -> fpPr primFExp
            LFLog      -> fpPr primFLog
