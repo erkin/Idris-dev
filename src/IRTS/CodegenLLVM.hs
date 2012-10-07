@@ -254,7 +254,7 @@ llname n = "_idris_" ++ (show n)
 toLLVMDecl :: Prims -> L.Module -> SDecl -> IO ()
 toLLVMDecl p m (SFun name args _ _)
     = do f <- L.addFunction m (llname name) $ idrFuncTy p $ length args
-         L.setFunctionCallConv f L.Fast
+         unless (name == (MN 0 "runMain")) $ L.setFunctionCallConv f L.Fast
          ps <- L.getParams f
          L.setValueName (head ps) "VM"
          mapM (uncurry L.setValueName) $ zip (tail ps) (map show args)
@@ -450,7 +450,8 @@ toLLVMExp p m f b vm s (SApp isTail name vars)
            Just callee -> do
              args <- mapM (lookupVar m s) vars
              call <- L.buildCall b callee (vm:args) ""
-             L.setInstructionCallConv call L.Fast
+             conv <- L.getFunctionCallConv callee
+             L.setInstructionCallConv call conv
              L.setTailCall call isTail
              return call
 toLLVMExp p m f b vm s (SLet name value body)
