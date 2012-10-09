@@ -6,6 +6,10 @@ import IRTS.Lang
 import IRTS.Defunctionalise
 import IRTS.Simplified
 import IRTS.CodegenCommon
+import IRTS.CodegenC
+import IRTS.CodegenLLVM
+import IRTS.CodegenJava
+import IRTS.Inliner
 
 import Idris.AbsSyntax
 import Core.TT
@@ -21,25 +25,38 @@ import System.Environment
 
 import Paths_idris
 
-genCode :: Codegen -> FilePath -> Term -> Idris ()
-genCode codegen f tm
-    = do checkMVs
-         let tmnames = namesUsed (STerm tm)
-         used <- mapM (allNames []) tmnames
-         defsIn <- mkDecls tm (concat used)
-         maindef <- irMain tm
-         outty <- outputTy
-         let defs = defsIn ++ [(MN 0 "runMain", maindef)]
-         -- iputStrLn $ showSep "\n" (map show defs)
-         let (nexttag, tagged) = addTags 0 (liftAll defs)
-         let ctxtIn = addAlist tagged emptyContext
-         let defuns = defunctionalise nexttag ctxtIn
-         -- iputStrLn $ showSep "\n" (map show (toAlist defuns))
-         let checked = checkDefs defuns (toAlist defuns)
-         case checked of
-           OK c -> do -- iputStrLn $ showSep "\n" (map show c)
-                      liftIO $ codegen c f outty "" NONE
-           Error e -> fail $ show e
+compile :: Target -> FilePath -> Term -> Idris ()
+compile target f tm 
+   = do checkMVs
+        let tmnames = namesUsed (STerm tm)
+        used <- mapM (allNames []) tmnames
+        defsIn <- mkDecls tm (concat used)
+        maindef <- irMain tm
+        objs <- getObjectFiles
+        libs <- getLibs
+        hdrs <- getHdrs
+        let defs = defsIn ++ [(MN 0 "runMain", maindef)]
+        -- iputStrLn $ showSep "\n" (map show defs)
+        let (nexttag, tagged) = addTags 65536 (liftAll defs)
+        let ctxtIn = addAlist tagged emptyContext
+        iLOG "Defunctionalising"
+        let defuns_in = defunctionalise nexttag ctxtIn
+        logLvl 5 $ show defuns_in
+        iLOG "Inlining"
+        let defuns = inline defuns_in
+        logLvl 5 $ show defuns
+
+        -- iputStrLn $ showSep "\n" (map show (toAlist defuns))
+        let checked = checkDefs defuns (toAlist defuns)
+        outty <- outputTy
+        case checked of
+            OK c -> case target of
+                         ViaC -> liftIO $ codegenC c f outty hdrs 
+                                   (concatMap mkObj objs)
+                                   (concatMap mkLib libs) NONE
+                         ViaLLVM -> liftIO $ codegenLLVM c f outty
+                         ViaJava -> liftIO $ codegenJava c f 
+            Error e -> fail $ show e 
   where checkMVs = do i <- get
                       case idris_metavars i \\ primDefs of
                             [] -> return ()
@@ -47,6 +64,8 @@ genCode codegen f tm
         inDir d h = do let f = d ++ "/" ++ h
                        ex <- doesFileExist f
                        if ex then return f else return h
+        mkObj f = f ++ " "
+        mkLib l = "-l" ++ l ++ " "
 
 irMain :: TT Name -> Idris LDecl
 irMain tm = do i <- ir tm
@@ -56,7 +75,7 @@ allNames :: [Name] -> Name -> Idris [Name]
 allNames ns n | n `elem` ns = return []
 allNames ns n = do i <- get
                    case lookupCtxt Nothing n (idris_callgraph i) of
-                      [ns'] -> do more <- mapM (allNames (n:ns)) ns' 
+                      [ns'] -> do more <- mapM (allNames (n:ns)) (map fst (calls ns')) 
                                   return (nub (n : concat more))
                       _ -> return [n]
 
@@ -92,7 +111,7 @@ mkLDecl n (Function tm _) = do e <- ir tm
                                return (declArgs [] n e)
 mkLDecl n (CaseOp _ _ pats _ _ args sc) = do e <- ir (args, sc)
                                              return (declArgs [] n e)
-mkLDecl n (TyDecl (DCon t a) _) = return $ LConstructor n (-1) a
+mkLDecl n (TyDecl (DCon t a) _) = return $ LConstructor n t a
 mkLDecl n (TyDecl (TCon t a) _) = return $ LConstructor n (-1) a
 mkLDecl n _ = return (LFun n [] (LError ("Impossible declaration " ++ show n)))
 
@@ -100,12 +119,15 @@ instance ToIR (TT Name) where
     ir tm = ir' [] tm where
       ir' env tm@(App f a)
           | (P _ (UN "mkForeign") _, args) <- unApply tm
-              = doForeign args
+              = doForeign env args
           | (P _ (UN "unsafePerformIO") _, [_, arg]) <- unApply tm
               = ir' env arg
           | (P _ (UN "lazy") _, [_, arg]) <- unApply tm
               = do arg' <- ir' env arg
                    return $ LLazyExp arg'
+          | (P _ (UN "fork") _, [arg]) <- unApply tm
+              = do arg' <- ir' env arg
+                   return $ LOp LFork [LLazyExp arg']
           | (P _ (UN "prim__IO") _, [v]) <- unApply tm
               = do v' <- ir' env v
                    return v'
@@ -127,15 +149,19 @@ instance ToIR (TT Name) where
                    args' <- mapM (ir' env) args
                    return (LApp False f' args')
       ir' env (P _ n _) = return $ LV (Glob n)
-      ir' env (V i)     = return $ LV (Glob (env!!i))
+      ir' env (V i)     | i < length env = return $ LV (Glob (env!!i))
+                        | otherwise = error $ "IR fail " ++ show i ++ " " ++ show tm
       ir' env (Bind n (Lam _) sc)
-          = do sc' <- ir' (n : env) sc
-               return $ LLam [n] sc'
+          = do let n' = uniqueName n env
+               sc' <- ir' (n' : env) sc
+               return $ LLam [n'] sc'
       ir' env (Bind n (Let _ v) sc)
           = do sc' <- ir' (n : env) sc
                v' <- ir' env v
                return $ LLet n v' sc'
       ir' env (Bind _ _ _) = return $ LConst (I 424242)
+      ir' env (Proj t i) = do t' <- ir' env t
+                              return $ LProj t' i
       ir' env (Constant c) = return $ LConst c
       ir' env _ = return $ LError "Impossible"
 
@@ -152,16 +178,16 @@ instance ToIR (TT Name) where
       buildApp env e xs = do xs' <- mapM (ir' env) xs
                              return $ LApp False e xs'
 
-doForeign :: [TT Name] -> Idris LExp
-doForeign (_ : fgn : args)
-   | (_, (Constant (Str fgnName) : fgnArgTys : ret : [])) <- unApply fgn
-        = let tys = getFTypes fgnArgTys
-              rty = mkIty' ret in
-              do args' <- mapM ir args
-                 -- wrap it in a prim__IO
-                 -- return $ con_ 0 @@ impossible @@ 
-                 return $ LLazyExp $ LForeign LANG_C rty fgnName (zip tys args')
-   | otherwise = fail "Badly formed foreign function call"
+      doForeign :: [Name] -> [TT Name] -> Idris LExp
+      doForeign env (_ : fgn : args)
+         | (_, (Constant (Str fgnName) : fgnArgTys : ret : [])) <- unApply fgn
+              = let tys = getFTypes fgnArgTys
+                    rty = mkIty' ret in
+                    do args' <- mapM (ir' env) args
+                       -- wrap it in a prim__IO
+                       -- return $ con_ 0 @@ impossible @@ 
+                       return $ LLazyExp $ LForeign LANG_C rty fgnName (zip tys args')
+         | otherwise = fail "Badly formed foreign function call"
 
 getFTypes :: TT Name -> [FType]
 getFTypes tm = case unApply tm of
@@ -186,11 +212,16 @@ instance ToIR ([Name], SC) where
                          return $ LLam args tree'
 
 instance ToIR SC where
-    ir (STerm t) = ir t
-    ir (UnmatchedCase str) = return $ LError str
-    ir (Case n alts) = do alts' <- mapM mkIRAlt alts
-                          return $ LCase (LV (Glob n)) alts'
-      where
+    ir t = ir' t where
+
+        ir' (STerm t) = ir t
+        ir' (UnmatchedCase str) = return $ LError str
+        ir' (ProjCase tm alts) = do alts' <- mapM mkIRAlt alts
+                                    tm' <- ir tm
+                                    return $ LCase tm' alts'
+        ir' (Case n alts) = do alts' <- mapM mkIRAlt alts
+                               return $ LCase (LV (Glob n)) alts'
+
         mkIRAlt (ConCase n t args rhs) 
              = do rhs' <- ir rhs
                   return $ LConCase (-1) n args rhs'
@@ -205,8 +236,4 @@ instance ToIR SC where
         mkIRAlt (DefaultCase rhs)
            = do rhs' <- ir rhs
                 return $ LDefaultCase rhs'
-
-
-
-
 

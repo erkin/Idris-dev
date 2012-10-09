@@ -28,8 +28,10 @@ unify ctxt env topx topy
     = -- case runStateT (un' False [] topx topy) (UI 0 [] []) of
       --    OK (v, UI _ inj []) -> return (filter notTrivial v, inj, [])
       --    _ -> 
+      -- trace ("Unifying " ++ show (topx, topy)) $
                let topxn = normalise ctxt env topx
 	           topyn = normalise ctxt env topy in
+--                     trace ("Unifying " ++ show (topxn, topyn)) $
 		     case runStateT (un' False [] topxn topyn)
 		  	        (UI 0 [] []) of
 	               OK (v, UI _ inj fails) -> return (filter notTrivial v, inj, reverse fails)
@@ -60,6 +62,15 @@ unify ctxt env topx topy
     un' :: Bool -> [(Name, Name)] -> TT Name -> TT Name ->
            StateT UInfo 
            TC [(Name, TT Name)]
+    un' fn names x y | x == y = return [] -- shortcut
+    un' fn names topx@(P (DCon _ _) x _) topy@(P (DCon _ _) y _)
+                | x /= y = unifyFail topx topy
+    un' fn names topx@(P (TCon _ _) x _) topy@(P (TCon _ _) y _)
+                | x /= y = unifyFail topx topy
+    un' fn names topx@(P (DCon _ _) x _) topy@(P (TCon _ _) y _)
+                = unifyFail topx topy
+    un' fn names topx@(P (TCon _ _) x _) topy@(P (DCon _ _) y _)
+                = unifyFail topx topy
     un' fn bnames (P Bound x _)  (P Bound y _)  
         | (x,y) `elem` bnames = do sc 1; return []
     un' fn bnames (P Bound x _) tm
@@ -77,8 +88,11 @@ unify ctxt env topx topy
     un' fn bnames (P Bound x _) (V i)
         | fst (bnames!!i) == x || snd (bnames!!i) == x = do sc 1; return []
 
-    un' fn bnames (App fx ax) (App fy ay)    
-        = do uplus -- do the second one if the first adds any errors 
+    un' fn bnames appx@(App fx ax) appy@(App fy ay)    
+        = do let (headx, _) = unApply fx
+             let (heady, _) = unApply fy
+             checkHeads headx heady
+             uplus -- do the second one if the first adds any errors 
                 (do hf <- un' True bnames fx fy 
                     let ax' = hnormalise hf ctxt env (substNames hf ax)
                     let ay' = hnormalise hf ctxt env (substNames hf ay)
@@ -93,6 +107,16 @@ unify ctxt env topx topy
                     combine bnames hf ha)
       where hnormalise [] _ _ t = t
             hnormalise ns ctxt env t = normalise ctxt env t
+            checkHeads (P (DCon _ _) x _) (P (DCon _ _) y _)
+                | x /= y = unifyFail appx appy
+            checkHeads (P (TCon _ _) x _) (P (TCon _ _) y _)
+                | x /= y = unifyFail appx appy
+            checkHeads (P (DCon _ _) x _) (P (TCon _ _) y _)
+                = unifyFail appx appy
+            checkHeads (P (TCon _ _) x _) (P (DCon _ _) y _)
+                = unifyFail appx appy
+            checkHeads _ _ = return []
+
     un' fn bnames x (Bind n (Lam t) (App y (P Bound n' _)))
         | n == n' = un' False bnames x y
     un' fn bnames (Bind n (Lam t) (App x (P Bound n' _))) y
@@ -104,9 +128,20 @@ unify ctxt env topx topy
     un' fn bnames x y 
         | OK True <- convEq' ctxt x y = do sc 1; return []
         | otherwise = do UI s i f <- get
-                         let err = CantUnify topx topy (CantUnify x y (Msg "") [] s) (errEnv env) s
+                         let r = recoverable x y
+                         let err = CantUnify r
+                                     topx topy (CantUnify r x y (Msg "") [] s) (errEnv env) s
                          put (UI s i ((x, y, env, err) : f))
                          return [] -- lift $ tfail err
+
+    -- shortcut failure, if we *know* nothing can fix it
+    unifyFail x y = do UI s i f <- get
+                       let r = recoverable x y
+                       let err = CantUnify r
+                                   topx topy (CantUnify r x y (Msg "") [] s) (errEnv env) s
+                       put (UI s i ((x, y, env, err) : f))
+                       lift $ tfail err
+
 
     uB bnames (Let tx vx) (Let ty vy)
         = do h1 <- un' False bnames tx ty
@@ -123,8 +158,9 @@ unify ctxt env topx topy
     uB bnames (Hole tx) (Hole ty) = un' False bnames tx ty
     uB bnames (PVar tx) (PVar ty) = un' False bnames tx ty
     uB bnames x y = do UI s i f <- get
-                       let err = CantUnify topx topy
-                                  (CantUnify (binderTy x) (binderTy y) (Msg "") [] s)
+                       let r = recoverable (binderTy x) (binderTy y)
+                       let err = CantUnify r topx topy
+                                  (CantUnify r (binderTy x) (binderTy y) (Msg "") [] s)
                                   (errEnv env) s
                        put (UI s i ((binderTy x, binderTy y, env, err) : f))
                        return [] -- lift $ tfail err
@@ -136,6 +172,22 @@ unify ctxt env topx topy
             Just t' -> do un' False bnames t t'
                           sc 1
                           combine bnames as bs
+
+    -- If there are any clashes of constructors, deem it unrecoverable, otherwise some
+    -- more work may help.
+    -- FIXME: Depending on how overloading gets used, this may cause problems. Better
+    -- rethink overloading properly...
+
+    recoverable (P (DCon _ _) x _) (P (DCon _ _) y _)
+        | x == y = True
+        | otherwise = False
+--     recoverable (P (DCon _ _) x _) (P (TCon _ _) y _) = False
+--     recoverable (P (TCon _ _) x _) (P (DCon _ _) y _) = False
+    recoverable p@(P _ _ _) (App f a) = recoverable p f
+    recoverable (App f a) p@(P _ _ _) = recoverable f p
+    recoverable (App f a) (App f' a')
+        = recoverable f f' && recoverable a a'
+    recoverable _ _ = True
 
 errEnv = map (\(x, b) -> (x, binderTy b))
 

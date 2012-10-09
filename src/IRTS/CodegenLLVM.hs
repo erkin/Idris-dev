@@ -1,11 +1,12 @@
 {-# LANGUAGE TypeOperators #-}
-module IRTS.CodegenLLVM (codegen) where
+module IRTS.CodegenLLVM (codegenLLVM) where
 
 import IRTS.Bytecode
 import IRTS.Lang
 import IRTS.Simplified
 import IRTS.CodegenCommon
 import Core.TT
+import Util.System
 import Paths_idris
 
 import qualified LLVM.Wrapper.Core as L
@@ -19,8 +20,11 @@ import System.Exit (ExitCode(..))
 import Foreign.Ptr
 import Control.Monad
 
-codegen :: Codegen
-codegen defs out exec flags dbg
+codegenLLVM :: [(Name, SDecl)] ->
+               String -> -- output file name
+               OutputType -> -- generate executable if True, only .o if False
+               IO ()
+codegenLLVM defs out exec
     = L.withModule "" $ \m -> do
         prims <- declarePrimitives m
         decls <- mapM (toLLVMDecl prims m . snd) defs
@@ -38,8 +42,7 @@ codegen defs out exec flags dbg
                                   rtsDir <- fmap (++ "/rts") getDataDir
                                   exit <- rawSystem "gcc" [ obj, "-O3"
                                                           , "-L" ++ rtsDir
-                                                          , "-lidris_rts", "-lgmp", "-lm"
-                                                          , "-lidris_llvm_main"
+                                                          , "-lidris_rts", "-lgmp", "-lpthread", "-lm"
                                                           , "-o", out
                                                           ]
                                   when (exit /= ExitSuccess) $ fail "FAILURE: Linking"
@@ -672,3 +675,13 @@ toLLVMExp p m f b vm s (SOp prim vars)
            _ -> fail $ "Unimplemented primitive operator: " ++ show prim
 toLLVMExp p m f b vm s (SError message)
     = buildError p b message
+toLLVMExp p m f b vm s (SProj var index)
+    = do v <- lookupVar m s var
+         p <- L.buildInBoundsGEP b v
+              [ L.constInt L.int32Type 0 True
+              , L.constInt L.int32Type 1 True
+              , L.constInt L.int32Type 2 True
+              , L.constInt L.int32Type (fromIntegral index) True
+              ] ""
+         L.buildLoad b p ""
+toLLVMExp p _ _ _ _ _ SNothing = return $ L.getUndef $ L.pointerType (valTy p) 0

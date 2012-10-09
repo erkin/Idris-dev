@@ -68,9 +68,10 @@ getTotality n
                 [t] -> return t
                 _ -> return (Total [])
 
-addToCG :: Name -> [Name] -> Idris ()
+addToCG :: Name -> [(Name, [[Name]])] -> Idris ()
 addToCG n ns = do i <- get
-                  put (i { idris_callgraph = addDef n ns (idris_callgraph i) })
+                  put (i { idris_callgraph = addDef n (CGInfo ns [])
+                                                      (idris_callgraph i) })
 
 addToCalledG :: Name -> [Name] -> Idris ()
 addToCalledG n ns = return () -- TODO
@@ -195,6 +196,11 @@ setLogLevel l = do i <- get
                    let opt' = opts { opt_logLevel = l }
                    put (i { idris_options = opt' } )
 
+setCmdLine :: [Opt] -> Idris ()
+setCmdLine opts = do i <- get
+                     let iopts = idris_options i
+                     put (i { idris_options = iopts { opt_cmdline = opts } })
+
 logLevel :: Idris Int
 logLevel = do i <- get
               return (opt_logLevel (idris_options i))
@@ -219,15 +225,15 @@ setREPL t = do i <- get
                let opt' = opts { opt_repl = t }
                put (i { idris_options = opt' })
 
-setLLVM :: Bool -> Idris ()
-setLLVM t = do i <- get
-               let opts = idris_options i
-               let opt' = opts { opt_useLLVM = t }
-               put (i { idris_options = opt' })
+setTarget :: Target -> Idris ()
+setTarget t = do i <- get
+                 let opts = idris_options i
+                 let opt' = opts { opt_target = t }
+                 put (i { idris_options = opt' })
 
-useLLVM :: Idris Bool
-useLLVM = do i <- get
-             return (opt_useLLVM (idris_options i))
+target :: Idris Target
+target = do i <- get
+            return (opt_target (idris_options i))
 
 setOutputTy :: OutputType -> Idris ()
 setOutputTy t = do i <- get
@@ -278,6 +284,12 @@ setIBCSubDir fp = do i <- get
 valIBCSubDir :: IState -> Idris FilePath
 valIBCSubDir i = return (opt_ibcsubdir (idris_options i))
 
+addImportDir :: FilePath -> Idris ()
+addImportDir fp = do i <- get
+                     let opts = idris_options i
+                     let opt' = opts { opt_importdirs = fp : opt_importdirs opts }
+                     put (i { idris_options = opt' })
+
 setImportDirs :: [FilePath] -> Idris ()
 setImportDirs fps = do i <- get
                        let opts = idris_options i
@@ -285,9 +297,8 @@ setImportDirs fps = do i <- get
                        put (i { idris_options = opt' })
 
 allImportDirs :: IState -> Idris [FilePath]
-allImportDirs i = do datadir <- liftIO $ getDataDir
-                     let optdirs = opt_importdirs (idris_options i)
-                     return ("." : (optdirs ++ [datadir]))
+allImportDirs i = do let optdirs = opt_importdirs (idris_options i)
+                     return ("." : optdirs)
 
 impShow :: Idris Bool
 impShow = do i <- get
@@ -542,9 +553,12 @@ addStatics n tm ptm =
 -- This has become a right mess already. Better redo it some time...
 
 implicit :: SyntaxInfo -> Name -> PTerm -> Idris PTerm
-implicit syn n ptm 
+implicit syn n ptm = implicit' syn [] n ptm
+
+implicit' :: SyntaxInfo -> [Name] -> Name -> PTerm -> Idris PTerm
+implicit' syn ignore n ptm 
     = do i <- get
-         let (tm', impdata) = implicitise syn i ptm
+         let (tm', impdata) = implicitise syn ignore i ptm
 --          let (tm'', spos) = findStatics i tm'
          put (i { idris_implicits = addDef n impdata (idris_implicits i) })
          addIBC (IBCImp n)
@@ -553,13 +567,13 @@ implicit syn n ptm
 --          put (i { idris_statics = addDef n spos (idris_statics i) })
          return tm'
 
-implicitise :: SyntaxInfo -> IState -> PTerm -> (PTerm, [PArg])
-implicitise syn ist tm
+implicitise :: SyntaxInfo -> [Name] -> IState -> PTerm -> (PTerm, [PArg])
+implicitise syn ignore ist tm
     = let (declimps, ns') = execState (imps True [] tm) ([], []) 
-          ns = ns' \\ (map fst pvars ++ no_imp syn) in
+          ns = ns' \\ (map fst pvars ++ no_imp syn ++ ignore) in
           if null ns 
             then (tm, reverse declimps) 
-            else implicitise syn ist (pibind uvars ns tm)
+            else implicitise syn ignore ist (pibind uvars ns tm)
   where
     uvars = using syn
     pvars = syn_params syn
@@ -706,13 +720,24 @@ addImpl' inpat env ist ptm = ai env ptm
 
 aiFn :: Bool -> Bool -> IState -> FC -> Name -> [PArg] -> Either Err PTerm
 aiFn inpat True ist fc f []
-  = case lookupCtxt Nothing f (idris_implicits ist) of
-        [] -> Right $ PRef fc f
-        alts -> if (any (all imp) alts)
+  = case lookupDef Nothing f (tt_ctxt ist) of
+        [] -> Right $ PPatvar fc f
+        alts -> let ialts = lookupCtxt Nothing f (idris_implicits ist) in
+                    -- trace (show f ++ " " ++ show (fc, any (all imp) ialts, ialts, any constructor alts)) $ 
+                    if (not (vname f) || tcname f 
+                           || any constructor alts || any allImp ialts)
                         then aiFn inpat False ist fc f [] -- use it as a constructor
-                        else Right $ PRef fc f
+                        else Right $ PPatvar fc f
     where imp (PExp _ _ _) = False
           imp _ = True
+          allImp [] = False
+          allImp xs = all imp xs
+          constructor (TyDecl (DCon _ _) _) = True
+          constructor _ = False
+
+          vname (UN n) = True -- non qualified
+          vname _ = False
+
 aiFn inpat expat ist fc f as
     | f `elem` primNames = Right $ PApp fc (PRef fc f) as
 aiFn inpat expat ist fc f as

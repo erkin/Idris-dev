@@ -153,6 +153,7 @@ elab ist info pattern tcgen fn tm
         = trySeq as
         where trySeq [] = fail "All alternatives fail to elaborate"
               trySeq (x : xs) = try (elab' ina x) (trySeq xs)
+    elab' ina (PPatvar fc n) | pattern = patvar n
     elab' (ina, guarded) (PRef fc n) | pattern && not (inparamBlock n)
                          = do ctxt <- get_context
                               let iscon = isConName Nothing n ctxt
@@ -235,7 +236,7 @@ elab ist info pattern tcgen fn tm
             ctxt <- get_context
             let guarded = isConName Nothing f ctxt
 --             when True
-            try
+            tryWhen True
                 (do ns <- apply (Var f) (map isph args)
                     let (ns', eargs) 
                          = unzip $

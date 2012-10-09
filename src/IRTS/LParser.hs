@@ -1,13 +1,14 @@
 module IRTS.LParser where
 
+import Idris.AbsSyntaxTree
 import Core.CoreParser
 import Core.TT
 import IRTS.Lang
 import IRTS.Simplified
 import IRTS.Bytecode
 import IRTS.CodegenCommon
-import qualified IRTS.CodegenC as C
-import qualified IRTS.CodegenLLVM as LLVM
+import IRTS.CodegenC
+import IRTS.CodegenLLVM
 import IRTS.Defunctionalise
 import Paths_idris
 
@@ -47,8 +48,8 @@ strlit    = PTok.stringLiteral lexer
 chlit     = PTok.charLiteral lexer
 lchar = lexeme.char
 
-fovm :: Bool -> OutputType -> FilePath -> IO ()
-fovm llvm oty f
+fovm :: Target -> OutputType -> FilePath -> IO ()
+fovm tgt outty f
     = do defs <- parseFOVM f
          let (nexttag, tagged) = addTags 0 (liftAll defs)
              ctxtIn = addAlist tagged emptyContext
@@ -57,8 +58,10 @@ fovm llvm oty f
          let checked = checkDefs defuns (toAlist defuns)
 --       print checked
          case checked of
-           OK c -> (if llvm then LLVM.codegen else C.codegen) c "a.out" oty "" TRACE
-           Error e -> fail $ show e
+           OK c -> case tgt of
+                     ViaC -> codegenC c "a.out" outty ["math.h"] "" "" TRACE
+                     ViaLLVM -> codegenLLVM c "a.out" outty
+           Error e -> fail $ show e 
 
 parseFOVM :: FilePath -> IO [(Name, LDecl)]
 parseFOVM fname = do -- putStrLn $ "Reading " ++ fname

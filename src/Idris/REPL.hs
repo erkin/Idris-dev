@@ -12,8 +12,10 @@ import Idris.Delaborate
 import Idris.Compiler
 import Idris.Prover
 import Idris.Parser
+import Idris.Primitives
 import Idris.Coverage
 import Paths_idris
+import Util.System
 
 import Core.Evaluate
 import Core.ProofShell
@@ -21,8 +23,8 @@ import Core.TT
 import Core.Constraints
 
 import IRTS.Compiler
-import qualified IRTS.CodegenC as C
-import qualified IRTS.CodegenLLVM as LLVM
+import IRTS.LParser
+import IRTS.CodegenCommon
 
 -- import RTS.SC
 -- import RTS.Bytecode
@@ -31,12 +33,14 @@ import qualified IRTS.CodegenLLVM as LLVM
 
 import System.Console.Haskeline as H
 import System.FilePath
+import System.Exit
 import System.Environment
 import System.Process
 import System.Directory
 import System.IO
 import Control.Monad
 import Control.Monad.State
+import Data.Maybe
 import Data.List
 import Data.Char
 import Data.Version
@@ -83,11 +87,6 @@ processInput cmd orig inputs
                                    return (Just inputs)
                 Right Edit -> do edit fn orig
                                  return (Just inputs)
-                Right AddProof -> do idrisCatch (addProof fn orig)
-                                                (\e -> iputStrLn (show e))
-                                     return (Just inputs)
-                Right RmProof -> do rmProof orig
-                                    return (Just inputs)
                 Right Proofs -> do proofs orig
                                    return (Just inputs)
                 Right Quit -> do iputStrLn "Bye bye"
@@ -95,6 +94,23 @@ processInput cmd orig inputs
                 Right cmd  -> do idrisCatch (process fn cmd)
                                             (\e -> iputStrLn (show e))
                                  return (Just inputs)
+
+resolveProof :: Name -> Idris Name
+resolveProof n'
+  = do i <- get
+       ctxt <- getContext
+       n <- case lookupNames Nothing n' ctxt of
+                 [x] -> return x
+                 [] -> return n'
+                 ns -> fail $ pshow i (CantResolveAlts (map show ns))
+       return n
+
+removeProof :: Name -> Idris ()
+removeProof n =
+  do i <- get
+     let proofs = proof_list i
+     let ps = filter ((/= n) . fst) proofs
+     put $ i { proof_list = ps }
 
 edit :: FilePath -> IState -> Idris ()
 edit "" orig = iputStrLn "Nothing to edit"
@@ -116,38 +132,14 @@ edit f orig
                        | Just ed <- lookup "VISUAL" env = ed
                        | otherwise = "vi"
 
-addProof :: FilePath -> IState -> Idris ()
-addProof "" orig = iputStrLn "Nothing to add to"
-addProof f orig
-    = do let fb = f ++ "~"
-         liftIO $ copyFile f fb -- make a backup in case something goes wrong!
-         prog <- liftIO $ readFile fb
-         i <- get
-         case proof_list i of
-            [] -> iputStrLn "No proof to add"
-            (n, p) : proofs -> do let prog' = insertScript (showProof (lit f) n p) (lines prog)
-                                  liftIO $ writeFile f (unlines prog')
-                                  iputStrLn $ "Added proof " ++ show n
-                                  put (i { proof_list = proofs })
-                                  -- lift $ removeFile fb -- uncomment when less scared :)
-
-rmProof :: IState -> Idris ()
-rmProof orig
-  = do i <- get
-       case proof_list i of
-            [] -> iputStrLn "Nothing to remove"
-            (n, p) : ps -> do iputStrLn $ "Removed proof " ++ show n
-                              let metavars = idris_metavars i
-                              put (i { proof_list     = ps
-                                     , idris_metavars = n : metavars
-                                     })
 
 proofs :: IState -> Idris ()
 proofs orig
   = do i <- get
-       case proof_list i of
-            [] -> iputStrLn "No proofs"
-            ps -> mapM_ (\(n, p) -> iputStrLn $ showProof False n p) ps
+       let ps = proof_list i
+       case ps of
+            [] -> iputStrLn "No proofs available"
+            _  -> iputStrLn $ "Proofs:\n\t" ++ (show $ map fst ps)
 
 insertScript :: String -> [String] -> [String]
 insertScript prf [] = "\n---------- Proofs ----------" : "" : [prf]
@@ -173,8 +165,8 @@ process fn (ExecVal t)
 --                                                           [pexp t])
                          (tmpn, tmph) <- liftIO tempfile
                          liftIO $ hClose tmph
-                         llvm <- useLLVM
-                         genCode (if llvm then LLVM.codegen else C.codegen) tmpn tm
+                         t <- target
+                         compile t tmpn tm
                          liftIO $ system tmpn
                          return ()
     where fc = FC "(input)" 0 
@@ -236,21 +228,62 @@ process fn (Search t) = iputStrLn "Not implemented"
 process fn (Spec t) = do (tm, ty) <- elabVal toplevel False t
                          ctxt <- getContext
                          ist <- get
-                         let tm' = specialise ctxt [] [] {- (idris_statics ist) -} tm
+                         let tm' = simplify ctxt [] {- (idris_statics ist) -} tm
                          iputStrLn (show (delab ist tm'))
-process fn (Prove n') 
+
+process fn (RmProof n')
+  = do i <- get
+       n <- resolveProof n'
+       let proofs = proof_list i
+       case lookup n proofs of
+            Nothing -> iputStrLn "No proof to remove"
+            Just _  -> do removeProof n
+                          insertMetavar n
+                          iputStrLn $ "Removed proof " ++ show n
+                          where
+                            insertMetavar :: Name -> Idris ()
+                            insertMetavar n =
+                              do i <- get
+                                 let ms = idris_metavars i
+                                 put $ i { idris_metavars = n : ms }
+
+process fn (AddProof n')
+  = do let fb = fn ++ "~"
+       liftIO $ copyFile fn fb -- make a backup in case something goes wrong!
+       prog <- liftIO $ readFile fb
+       i <- get
+       n <- resolveProof n'
+       let proofs = proof_list i
+       case lookup n proofs of
+            Nothing -> iputStrLn "No proof to add"
+            Just p  -> do let prog' = insertScript (showProof (lit fn) n p) ls
+                          liftIO $ writeFile fn (unlines prog')
+                          removeProof n
+                          iputStrLn $ "Added proof " ++ show n
+                          where ls = (lines prog)
+
+process fn (ShowProof n')
+  = do i <- get
+       n <- resolveProof n'
+       let proofs = proof_list i
+       case lookup n proofs of
+            Nothing -> iputStrLn "No proof to show"
+            Just p  -> iputStrLn $ showProof False n p
+
+process fn (Prove n')
      = do ctxt <- getContext
           ist <- get
           n <- case lookupNames Nothing n' ctxt of
                     [x] -> return x
                     [] -> return n'
-                    ns -> fail $ pshow ist (CantResolveAlts (map show ns)) 
+                    ns -> fail $ pshow ist (CantResolveAlts (map show ns))
           prover (lit fn) n
           -- recheck totality
           i <- get
           totcheck (FC "(input)" 0, n)
           mapM_ (\ (f,n) -> setTotality n Unchecked) (idris_totcheck i)
           mapM_ checkDeclTotality (idris_totcheck i)
+
 process fn (HNF t)  = do (tm, ty) <- elabVal toplevel False t
                          ctxt <- getContext
                          ist <- get
@@ -267,8 +300,8 @@ process fn Execute = do (m, _) <- elabVal toplevel False
 --                                      (PRef (FC "main" 0) (NS (UN "main") ["main"]))
                         (tmpn, tmph) <- liftIO tempfile
                         liftIO $ hClose tmph
-                        llvm <- useLLVM
-                        genCode (if llvm then LLVM.codegen else C.codegen) tmpn m
+                        t <- target
+                        compile t tmpn m
                         liftIO $ system tmpn
                         return ()
   where fc = FC "main" 0                     
@@ -276,14 +309,13 @@ process fn (NewCompile f)
      = do (m, _) <- elabVal toplevel False
                       (PApp fc (PRef fc (UN "run__IO"))
                           [pexp $ PRef fc (NS (UN "main") ["main"])])
-          compile f m
+          compileEpic f m
   where fc = FC "main" 0                     
-process fn (Compile f) 
+process fn (Compile target f) 
       = do (m, _) <- elabVal toplevel False
                        (PApp fc (PRef fc (UN "run__IO"))
                        [pexp $ PRef fc (NS (UN "main") ["main"])])
-           llvm <- useLLVM
-           genCode (if llvm then LLVM.codegen else C.codegen) f m
+           compile target f m
   where fc = FC "main" 0                     
 process fn (LogLvl i) = setLogLevel i 
 process fn Metavars 
@@ -327,18 +359,6 @@ showTotalN i n = case lookupTotal n (tt_ctxt i) of
                         [t] -> showTotal t i
                         _ -> ""
 
-tempfile :: IO (FilePath, Handle)
-tempfile = do env <- environment "TMPDIR"
-              let dir = case env of
-                              Nothing -> "/tmp"
-                              (Just d) -> d
-              openTempFile dir "esc"
-
-environment :: String -> IO (Maybe String)
-environment x = Prelude.catch (do e <- getEnv x
-                                  return (Just e))
-                              (\_ -> return Nothing)
-
 displayHelp = let vstr = showVersion version in
               "\nIdris version " ++ vstr ++ "\n" ++
               "--------------" ++ map (\x -> '-') vstr ++ "\n\n" ++
@@ -347,6 +367,38 @@ displayHelp = let vstr = showVersion version in
         col c1 c2 l m r = 
             l ++ take (c1 - length l) (repeat ' ') ++ 
             m ++ take (c2 - length m) (repeat ' ') ++ r ++ "\n"
+
+parseArgs :: [String] -> [Opt]
+parseArgs [] = []
+parseArgs ("--log":lvl:ns)      = OLogging (read lvl) : (parseArgs ns)
+parseArgs ("--noprelude":ns)    = NoPrelude : (parseArgs ns)
+parseArgs ("--check":ns)        = NoREPL : (parseArgs ns)
+parseArgs ("-o":n:ns)           = NoREPL : Output n : (parseArgs ns)
+parseArgs ("-no":n:ns)          = NoREPL : NewOutput n : (parseArgs ns)
+parseArgs ("--typecase":ns)     = TypeCase : (parseArgs ns)
+parseArgs ("--typeintype":ns)   = TypeInType : (parseArgs ns)
+parseArgs ("--nocoverage":ns)   = NoCoverage : (parseArgs ns)
+parseArgs ("--errorcontext":ns) = ErrContext : (parseArgs ns)
+parseArgs ("--help":ns)         = Usage : (parseArgs ns)
+parseArgs ("--link":ns)         = ShowLibs : (parseArgs ns)
+parseArgs ("--libdir":ns)       = ShowLibdir : (parseArgs ns)
+parseArgs ("--include":ns)      = ShowIncs : (parseArgs ns)
+parseArgs ("--version":ns)      = Ver : (parseArgs ns)
+parseArgs ("--verbose":ns)      = Verbose : (parseArgs ns)
+parseArgs ("--ibcsubdir":n:ns)  = IBCSubDir n : (parseArgs ns)
+parseArgs ("-i":n:ns)           = ImportDir n : (parseArgs ns)
+parseArgs ("--warn":ns)         = WarnOnly : (parseArgs ns)
+parseArgs ("--package":n:ns)    = Pkg n : (parseArgs ns)
+parseArgs ("-p":n:ns)           = Pkg n : (parseArgs ns)
+parseArgs ("--build":n:ns)      = PkgBuild n : (parseArgs ns)
+parseArgs ("--install":n:ns)    = PkgInstall n : (parseArgs ns)
+parseArgs ("--clean":n:ns)      = PkgClean n : (parseArgs ns)
+parseArgs ("--bytecode":n:ns)   = NoREPL : BCAsm n : (parseArgs ns)
+parseArgs ("--fovm":n:ns)       = NoREPL : FOVM n : (parseArgs ns)
+parseArgs ("--llvm":ns)         = UseTarget ViaLLVM : (parseArgs ns)
+parseArgs ("-S":ns)             = OutputTy Raw : (parseArgs ns)
+parseArgs ("-c":ns)             = OutputTy Object : (parseArgs ns)
+parseArgs (n:ns)                = Filename n : (parseArgs ns)
 
 help =
   [ (["Command"], "Arguments", "Purpose"),
@@ -359,9 +411,10 @@ help =
     ([":e",":edit"], "", "Edit current file using $EDITOR or $VISUAL"),
     ([":m",":metavars"], "", "Show remaining proof obligations (metavariables)"),
     ([":p",":prove"], "<name>", "Prove a metavariable"),
-    ([":a",":addproof"], "", "Add last proof to source file"),
-    ([":rmproof"], "", "Remove last proof from proof stack"),
-    ([":proofs"], "", "Show proof stack"),
+    ([":a",":addproof"], "<name>", "Add proof to source file"),
+    ([":rmproof"], "<name>", "Remove proof from proof stack"),
+    ([":showproof"], "<name>", "Show proof"),
+    ([":proofs"], "", "Show available proofs"),
     ([":c",":compile"], "<filename>", "Compile to an executable <filename>"),
     ([":exec",":execute"], "", "Compile to an executable and run"),
     ([":?",":h",":help"], "", "Display this help text"),
@@ -369,4 +422,135 @@ help =
     ([":unset"], "<option>", "Unset an option"),
     ([":q",":quit"], "", "Exit the Idris system")
   ]
+
+-- invoke as if from command line
+idris :: [Opt] -> IO IState
+idris opts = runInputT defaultSettings $ execStateT (idrisMain opts) idrisInit
+
+idrisMain :: [Opt] -> Idris ()
+idrisMain opts = 
+    do let inputs = opt getFile opts
+       let runrepl = not (NoREPL `elem` opts)
+       let output = opt getOutput opts
+       let newoutput = opt getNewOutput opts
+       let ibcsubdir = opt getIBCSubDir opts
+       let importdirs = opt getImportDir opts
+       let bcs = opt getBC opts
+       let vm = opt getFOVM opts
+       let pkgdirs = opt getPkgDir opts
+       let outty = case opt getOutputTy opts of
+                     [] -> Executable
+                     xs -> last xs
+       let tgt = case opt getTarget opts of
+                   [] -> ViaC
+                   xs -> last xs
+       setREPL runrepl
+       setVerbose runrepl
+       setCmdLine opts
+       setOutputTy outty
+       setTarget tgt
+       when (Verbose `elem` opts) $ setVerbose True
+       mapM_ makeOption opts
+       -- if we have the --fovm flag, drop into the first order VM testing
+       case vm of
+	    [] -> return ()
+	    xs -> liftIO $ mapM_ (fovm tgt outty) xs 
+       -- if we have the --bytecode flag, drop into the bytecode assembler
+       case bcs of
+	    [] -> return ()
+	    xs -> return () -- liftIO $ mapM_ bcAsm xs 
+       case ibcsubdir of
+         [] -> setIBCSubDir ""
+         (d:_) -> setIBCSubDir d
+       setImportDirs importdirs
+       addPkgDir "base"
+       mapM_ addPkgDir pkgdirs
+       elabPrims
+       when (not (NoPrelude `elem` opts)) $ do x <- loadModule "prelude"
+                                               return ()
+       when runrepl $ iputStrLn banner 
+       ist <- get
+       mods <- mapM loadModule inputs
+       ok <- noErrors
+       when ok $ case output of
+                    [] -> return ()
+                    (o:_) -> process "" (Compile tgt o)  
+       when ok $ case newoutput of
+                    [] -> return ()
+                    (o:_) -> process "" (NewCompile o)  
+       when runrepl $ repl ist inputs
+       ok <- noErrors
+       when (not ok) $ liftIO (exitWith (ExitFailure 1))
+  where
+    makeOption (OLogging i) = setLogLevel i
+    makeOption TypeCase = setTypeCase True
+    makeOption TypeInType = setTypeInType True
+    makeOption NoCoverage = setCoverage False
+    makeOption ErrContext = setErrContext True
+    makeOption _ = return ()
+
+    addPkgDir :: String -> Idris ()
+    addPkgDir p = do ddir <- liftIO $ getDataDir 
+                     addImportDir (ddir ++ "/" ++ p)
+
+getFile :: Opt -> Maybe String
+getFile (Filename str) = Just str
+getFile _ = Nothing
+
+getBC :: Opt -> Maybe String
+getBC (BCAsm str) = Just str
+getBC _ = Nothing
+
+getFOVM :: Opt -> Maybe String
+getFOVM (FOVM str) = Just str
+getFOVM _ = Nothing
+
+getOutput :: Opt -> Maybe String
+getOutput (Output str) = Just str
+getOutput _ = Nothing
+
+getNewOutput :: Opt -> Maybe String
+getNewOutput (NewOutput str) = Just str
+getNewOutput _ = Nothing
+
+getIBCSubDir :: Opt -> Maybe String
+getIBCSubDir (IBCSubDir str) = Just str
+getIBCSubDir _ = Nothing
+
+getImportDir :: Opt -> Maybe String
+getImportDir (ImportDir str) = Just str
+getImportDir _ = Nothing
+
+getPkgDir :: Opt -> Maybe String
+getPkgDir (Pkg str) = Just str
+getPkgDir _ = Nothing
+
+getPkg :: Opt -> Maybe (Bool, String)
+getPkg (PkgBuild str) = Just (False, str)
+getPkg (PkgInstall str) = Just (True, str)
+getPkg _ = Nothing
+
+getPkgClean :: Opt -> Maybe String
+getPkgClean (PkgClean str) = Just str
+getPkgClean _ = Nothing
+
+getTarget :: Opt -> Maybe Target
+getTarget (UseTarget x) = Just x
+getTarget _ = Nothing
+
+getOutputTy :: Opt -> Maybe OutputType
+getOutputTy (OutputTy t) = Just t
+getOutputTy _ = Nothing
+
+opt :: (Opt -> Maybe a) -> [Opt] -> [a]
+opt = mapMaybe 
+
+ver = showVersion version
+
+banner = "     ____    __     _                                          \n" ++     
+         "    /  _/___/ /____(_)____                                     \n" ++
+         "    / // __  / ___/ / ___/     Version " ++ ver ++ "\n" ++
+         "  _/ // /_/ / /  / (__  )      http://www.idris-lang.org/      \n" ++
+         " /___/\\__,_/_/  /_/____/       Type :? for help                \n" 
+
 

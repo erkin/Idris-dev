@@ -44,8 +44,12 @@ instance Show FC where
 
 data Err = Msg String
          | InternalMsg String
-         | CantUnify Term Term Err [(Name, Type)] Int -- Int is 'score' - how much we did unify
+         | CantUnify Bool Term Term Err [(Name, Type)] Int 
+              -- Int is 'score' - how much we did unify
+              -- Bool indicates recoverability, True indicates more info may make
+              -- unification succeed
          | NoSuchVariable Name
+         | NoTypeDecl Name
          | NotInjective Term Term Term
          | CantResolve Term
          | CantResolveAlts [String]
@@ -59,8 +63,9 @@ data Err = Msg String
 instance Sized Err where
   size (Msg msg) = length msg
   size (InternalMsg msg) = length msg
-  size (CantUnify left right err _ score) = size left + size right + size err
+  size (CantUnify _ left right err _ score) = size left + size right + size err
   size (NoSuchVariable name) = size name
+  size (NoTypeDecl name) = size name
   size (NotInjective l c r) = size l + size c + size r
   size (CantResolve trm) = size trm
   size (CantResolveAlts _) = 1
@@ -71,7 +76,7 @@ instance Sized Err where
   size (Inaccessible _) = 1
 
 score :: Err -> Int
-score (CantUnify _ _ m _ s) = s + score m
+score (CantUnify _ _ _ m _ s) = s + score m
 score (CantResolve _) = 20
 score (NoSuchVariable _) = 1000
 score _ = 0
@@ -79,14 +84,14 @@ score _ = 0
 instance Show Err where
     show (Msg s) = s
     show (InternalMsg s) = "Internal error: " ++ show s
-    show (CantUnify l r e sc i) = "CantUnify " ++ show l ++ " " ++ show r ++ " "
-                                  ++ show e ++ " in " ++ show sc ++ " " ++ show i
+    show (CantUnify _ l r e sc i) = "CantUnify " ++ show l ++ " " ++ show r ++ " "
+                                      ++ show e ++ " in " ++ show sc ++ " " ++ show i
     show (Inaccessible n) = show n ++ " is not an accessible pattern variable"
     show _ = "Error"
 
 instance Pretty Err where
   pretty (Msg m) = text m
-  pretty (CantUnify l r e _ i) =
+  pretty (CantUnify _ l r e _ i) =
     if size l + size r > breakingSize then
       text "Cannot unify" <+> colon $$
         nest nestingSize (pretty l <+> text "and" <+> pretty r) $$
@@ -157,6 +162,7 @@ traceWhen False _  a = a
 data Name = UN String
           | NS Name [String] -- root, namespaces 
           | MN Int String
+          | NErased -- name of somethng which is never used in scope
   deriving (Eq, Ord)
 {-! 
 deriving instance Binary Name 
@@ -166,6 +172,7 @@ instance Sized Name where
   size (UN n)     = 1
   size (NS n els) = 1 + length els
   size (MN i n) = 1
+  size NErased = 1
 
 instance Pretty Name where
   pretty (UN n) = text n
@@ -176,7 +183,7 @@ instance Show Name where
     show (UN n) = n
     show (NS n s) = showSep "." (reverse s) ++ "." ++ show n
     show (MN i s) = "{" ++ s ++ show i ++ "}"
-
+    show NErased = "_"
 
 -- Contexts allow us to map names to things. A root name maps to a collection
 -- of things in different namespaces with that name.
@@ -405,12 +412,27 @@ data TT n = P NameType n (TT n) -- embed type
           | Bind n (Binder (TT n)) (TT n)
           | App (TT n) (TT n) -- function, function type, arg
           | Constant Const
+          | Proj (TT n) Int -- argument projection; runtime only
           | Erased
           | Set UExp
   deriving (Ord, Functor)
 {-! 
 deriving instance Binary TT 
 !-}
+
+class TermSize a where
+  termsize :: a -> Int
+
+instance TermSize a => TermSize [a] where
+    termsize [] = 0
+    termsize (x : xs) = termsize x + termsize xs
+
+instance TermSize (TT a) where
+    termsize (P _ _ _) = 1
+    termsize (V _) = 1
+    termsize (Bind n (Let t v) sc) = termsize v + termsize sc
+    termsize (App f a) = termsize f + termsize a
+    termsize _ = 1
 
 instance Sized a => Sized (TT a) where
   size (P name n trm) = 1 + size name + size n + size trm
@@ -439,6 +461,7 @@ instance Eq n => Eq (TT n) where
     (==) (App fx ax)    (App fy ay)    = fx == fy && ax == ay
     (==) (Set _)        (Set _)        = True -- deal with constraints later
     (==) (Constant x)   (Constant y)   = x == y
+    (==) (Proj x i)     (Proj y j)     = x == y && i == j
     (==) Erased         _              = True
     (==) _              Erased         = True
     (==) _              _              = False
@@ -454,11 +477,21 @@ isInjective (Bind _ (Pi _) sc) = True
 isInjective (App f a)          = isInjective f
 isInjective _                  = False
 
+-- Count the number of instances of a de Bruijn index in a term
+vinstances :: Int -> TT n -> Int
+vinstances i (V x) | i == x = 1
+vinstances i (App f a) = vinstances i f + vinstances i a
+vinstances i (Bind x b sc) = instancesB b + vinstances (i + 1) sc 
+  where instancesB (Let t v) = vinstances i v
+        instancesB _ = 0
+vinstances i t = 0
+
 instantiate :: TT n -> TT n -> TT n
 instantiate e = subst 0 where
     subst i (V x) | i == x = e
     subst i (Bind x b sc) = Bind x (fmap (subst i) b) (subst (i+1) sc)
     subst i (App f a) = App (subst i f) (subst i a)
+    subst i (Proj x idx) = Proj (subst i x) idx 
     subst i t = t
 
 pToV :: Eq n => n -> TT n -> TT n
@@ -468,6 +501,7 @@ pToV' n i (Bind x b sc)
                 | n == x    = Bind x (fmap (pToV' n i) b) sc
                 | otherwise = Bind x (fmap (pToV' n i) b) (pToV' n (i+1) sc)
 pToV' n i (App f a) = App (pToV' n i f) (pToV' n i a)
+pToV' n i (Proj t idx) = Proj (pToV' n i t) idx
 pToV' n i t = t
 
 -- Convert several names. First in the list comes out as V 0
@@ -509,6 +543,7 @@ noOccurrence n t = no' 0 t
              noB' i (Guess t v) = no' i t && no' i v
              noB' i b = no' i (binderTy b)
     no' i (App f a) = no' i f && no' i a
+    no' i (Proj x _) = no' i x
     no' i _ = True
 
 -- Returns all names used free in the term
@@ -519,6 +554,7 @@ freeNames (Bind n (Let t v) sc) = nub $ freeNames v ++ (freeNames sc \\ [n])
                                         ++ freeNames t
 freeNames (Bind n b sc) = nub $ freeNames (binderTy b) ++ (freeNames sc \\ [n])
 freeNames (App f a) = nub $ freeNames f ++ freeNames a
+freeNames (Proj x i) = nub $ freeNames x
 freeNames _ = []
 
 -- Return the arity of a (normalised) type
@@ -641,6 +677,8 @@ prettyEnv env t = prettyEnv' env t False
       bracket p 2 $ prettySb env n b debug <> prettySe 10 ((n, b):env) sc debug
     prettySe p env (App f a) debug =
       bracket p 1 $ prettySe 1 env f debug <+> prettySe 0 env a debug
+    prettySe p env (Proj x i) debug =
+      prettySe 1 env x debug <+> text ("!" ++ show i)
     prettySe p env (Constant c) debug = pretty c
     prettySe p env Erased debug = text "[_]"
     prettySe p env (Set i) debug = text "Set" <+> (text . show $ i)
@@ -671,6 +709,7 @@ showEnv' env t dbg = se 10 env t where
         | noOccurrence n sc && not dbg = bracket p 2 $ se 1 env t ++ " -> " ++ se 10 ((n,b):env) sc
     se p env (Bind n b sc) = bracket p 2 $ sb env n b ++ se 10 ((n,b):env) sc
     se p env (App f a) = bracket p 1 $ se 1 env f ++ " " ++ se 0 env a
+    se p env (Proj x i) = se 1 env x ++ "!" ++ show i
     se p env (Constant c) = show c
     se p env Erased = "[__]"
     se p env (Set i) = "Set " ++ show i

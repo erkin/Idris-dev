@@ -31,55 +31,63 @@ data IOption = IOption { opt_logLevel :: Int,
                          opt_errContext :: Bool,
                          opt_repl     :: Bool,
                          opt_verbose  :: Bool,
-                         opt_useLLVM  :: Bool,
+                         opt_target   :: Target,
                          opt_outputTy :: OutputType,
                          opt_ibcsubdir :: FilePath,
-                         opt_importdirs :: [FilePath]
+                         opt_importdirs :: [FilePath],
+                         opt_cmdline :: [Opt] -- remember whole command line
                        }
     deriving (Show, Eq)
 
-defaultOpts = IOption 0 False False True False False True True False Executable "" []
+defaultOpts = IOption 0 False False True False False True True ViaC Executable "" [] []
 
 -- TODO: Add 'module data' to IState, which can be saved out and reloaded quickly (i.e
 -- without typechecking).
 -- This will include all the functions and data declarations, plus fixity declarations
 -- and syntax macros.
 
-data IState = IState { tt_ctxt :: Context,
-                       idris_constraints :: [(UConstraint, FC)],
-                       idris_infixes :: [FixDecl],
-                       idris_implicits :: Ctxt [PArg],
-                       idris_statics :: Ctxt [Bool],
-                       idris_classes :: Ctxt ClassInfo,
-                       idris_dsls :: Ctxt DSL,
-                       idris_optimisation :: Ctxt OptInfo, 
-                       idris_datatypes :: Ctxt TypeInfo,
-                       idris_patdefs :: Ctxt [([Name], Term, Term)], -- not exported
-                       idris_flags :: Ctxt [FnOpt],
-                       idris_callgraph :: Ctxt [Name],
-                       idris_calledgraph :: Ctxt [Name],
-                       idris_totcheck :: [(FC, Name)],
-                       idris_log :: String,
-                       idris_options :: IOption,
-                       idris_name :: Int,
-                       idris_metavars :: [Name],
-                       syntax_rules :: [Syntax],
-                       syntax_keywords :: [String],
-                       imported :: [FilePath],
-                       idris_scprims :: [(Name, (Int, PrimFn))],
-                       idris_objs :: [FilePath],
-                       idris_libs :: [String],
-                       idris_hdrs :: [String],
-                       proof_list :: [(Name, [String])],
-                       errLine :: Maybe Int,
-                       lastParse :: Maybe Name, 
-                       indent_stack :: [Int],
-                       brace_stack :: [Maybe Int],
-                       hide_list :: [(Name, Maybe Accessibility)],
-                       default_access :: Accessibility,
-                       ibc_write :: [IBCWrite],
-                       compiled_so :: Maybe String
-                     }
+data IState = IState {
+    tt_ctxt :: Context,
+    idris_constraints :: [(UConstraint, FC)],
+    idris_infixes :: [FixDecl],
+    idris_implicits :: Ctxt [PArg],
+    idris_statics :: Ctxt [Bool],
+    idris_classes :: Ctxt ClassInfo,
+    idris_dsls :: Ctxt DSL,
+    idris_optimisation :: Ctxt OptInfo, 
+    idris_datatypes :: Ctxt TypeInfo,
+    idris_patdefs :: Ctxt [([Name], Term, Term)], -- not exported
+    idris_flags :: Ctxt [FnOpt],
+    idris_callgraph :: Ctxt CGInfo, -- name, args used in each pos
+    idris_calledgraph :: Ctxt [Name],
+    idris_totcheck :: [(FC, Name)],
+    idris_log :: String,
+    idris_options :: IOption,
+    idris_name :: Int,
+    idris_metavars :: [Name],
+    syntax_rules :: [Syntax],
+    syntax_keywords :: [String],
+    imported :: [FilePath],
+    idris_scprims :: [(Name, (Int, PrimFn))],
+    idris_objs :: [FilePath],
+    idris_libs :: [String],
+    idris_hdrs :: [String],
+    proof_list :: [(Name, [String])],
+    errLine :: Maybe Int,
+    lastParse :: Maybe Name, 
+    indent_stack :: [Int],
+    brace_stack :: [Maybe Int],
+    hide_list :: [(Name, Maybe Accessibility)],
+    default_access :: Accessibility,
+    ibc_write :: [IBCWrite],
+    compiled_so :: Maybe String
+   }
+
+data CGInfo = CGInfo { calls :: [(Name, [[Name]])],
+                       argsused :: [Name] }
+{-! 
+deriving instance Binary CGInfo 
+!-}
 
 primDefs = [UN "unsafePerformIO", UN "mkLazyForeign", UN "mkForeign", UN "FalseElim"]
              
@@ -117,22 +125,44 @@ type Idris = StateT IState (InputT IO)
 
 -- Commands in the REPL
 
-data Command = Quit   | Help | Eval PTerm | Check PTerm | TotCheck Name
-             | Reload | Edit
-             | Compile String | Execute | ExecVal PTerm
+data Target = ViaC | ViaLLVM | ViaJava
+    deriving (Show, Eq)
+
+data Command = Quit
+             | Help
+             | Eval PTerm
+             | Check PTerm
+             | TotCheck Name
+             | Reload
+             | Edit
+             | Compile Target String
+             | Execute
+             | ExecVal PTerm
              | NewCompile String
-             | Metavars    | Prove Name | AddProof | RmProof | Proofs | Universes
-             | TTShell 
-             | LogLvl Int | Spec PTerm | HNF PTerm | Defn Name 
-             | Info Name  | DebugInfo Name
+             | Metavars
+             | Prove Name
+             | AddProof Name
+             | RmProof Name
+             | ShowProof Name
+             | Proofs
+             | Universes
+             | TTShell
+             | LogLvl Int
+             | Spec PTerm
+             | HNF PTerm
+             | Defn Name
+             | Info Name
+             | DebugInfo Name
              | Search PTerm
-             | SetOpt Opt | UnsetOpt Opt
+             | SetOpt Opt
+             | UnsetOpt Opt
              | NOP
 
 data Opt = Filename String
          | Ver
          | Usage
          | ShowLibs
+         | ShowLibdir
          | ShowIncs
          | NoPrelude
          | NoREPL
@@ -147,12 +177,16 @@ data Opt = Filename String
          | Verbose
          | IBCSubDir String
          | ImportDir String
+         | PkgBuild String
+         | PkgInstall String
+         | PkgClean String
+         | WarnOnly
+         | Pkg String
          | BCAsm String
          | FOVM String
-         | LLVM
+         | UseTarget Target
          | OutputTy OutputType
-    deriving Eq
-
+    deriving (Show, Eq)
 
 -- Parsed declarations
 
@@ -224,6 +258,7 @@ inlinable = elem Inlinable
 data PDecl' t = PFix     FC Fixity [String] -- fixity declaration
               | PTy      SyntaxInfo FC FnOpts Name t   -- type declaration
               | PClauses FC FnOpts Name [PClause' t]   -- pattern clause
+              | PCAF     FC Name t -- top level constant
               | PData    SyntaxInfo FC (PData' t)      -- data declaration
               | PParams  FC [(Name, t)] [PDecl' t] -- params block
               | PNamespace String [PDecl' t] -- new namespace
@@ -318,6 +353,7 @@ updateNs ns t = mapPT updateRef t
 
 data PTerm = PQuote Raw
            | PRef FC Name
+           | PPatvar FC Name
            | PLam Name PTerm PTerm
            | PPi  Plicity Name PTerm PTerm
            | PLet Name PTerm PTerm PTerm 
@@ -626,6 +662,7 @@ prettyImp impl = prettySe 10
         text "![" $$ pretty r <> text "]"
       else
         text "![" <> pretty r <> text "]"
+    prettySe p (PPatvar fc n) = pretty n
     prettySe p (PRef fc n) =
       if impl then
         pretty n
@@ -801,6 +838,7 @@ prettyImp impl = prettySe 10
 showImp :: Bool -> PTerm -> String
 showImp impl tm = se 10 tm where
     se p (PQuote r) = "![" ++ show r ++ "]"
+    se p (PPatvar fc n) = show n
     se p (PRef fc n) = if impl then show n -- ++ "[" ++ show fc ++ "]"
                                else showbasic n
       where showbasic n@(UN _) = show n

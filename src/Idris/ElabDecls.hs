@@ -221,7 +221,15 @@ elabCon info syn tn (n, t_in, fc)
 
 elabClauses :: ElabInfo -> FC -> FnOpts -> Name -> [PClause] -> Idris ()
 elabClauses info fc opts n_in cs = let n = liftname info n_in in  
-      do pats_in <- mapM (elabClause info (TCGen `elem` opts)) cs
+      do ctxt <- getContext
+         -- Check n actually exists
+         case lookupTy Nothing n ctxt of
+            [] -> -- TODO: turn into a CAF if there's no arguments
+                  -- question: CAFs in where blocks?
+                  tclift $ tfail $ (At fc (NoTypeDecl n))
+            _ -> return ()
+         pats_in <- mapM (elabClause info (TCGen `elem` opts)) cs
+         
          solveDeferred n
          let pats = mapMaybe id pats_in
          logLvl 3 (showSep "\n" (map (\ (l,r) -> 
@@ -230,6 +238,7 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
          ist <- get
          let tcase = opt_typecase (idris_options ist)
          let pdef = map debind $ map (simpl (tt_ctxt ist)) pats
+         tclift $ sameLength pdef
          cov <- coverage
          pcover <-
                  if cov  
@@ -259,7 +268,7 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
 --                                   return False
                     else return False
          pdef' <- applyOpts pdef 
-         tree@(CaseDef _ sc _) <- tclift $ simpleCase tcase pcover fc pdef
+         tree@(CaseDef _ sc _) <- tclift $ simpleCase tcase pcover False fc pdef
          ist <- get
 --          let wf = wellFounded ist n sc
          let tot = if pcover || AssertTotal `elem` opts
@@ -278,8 +287,7 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
                                         iputStrLn $ show fc ++
                                                     ":warning - Unreachable case: " ++ 
                                                     show (delab ist x)) xs
-         tree' <- tclift $ simpleCase tcase pcover fc pdef'
-         tclift $ sameLength pdef
+         tree' <- tclift $ simpleCase tcase pcover True fc pdef'
          logLvl 3 (show tree)
          logLvl 3 $ "Optimised: " ++ show tree'
          ctxt <- getContext
@@ -295,10 +303,10 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
                         i <- get
                         case lookupDef Nothing n (tt_ctxt i) of
                             (CaseOp _ _ _ scargs sc _ _ : _) ->
-                                do let ns = namesUsed sc \\ scargs
-                                   logLvl 2 $ "Called names: " ++ show ns
-                                   addToCG n ns
-                                   addToCalledG n ns -- plus names in type!
+                                do let calls = findCalls sc scargs
+                                   logLvl 2 $ "Called names: " ++ show calls
+                                   addToCG n calls
+                                   addToCalledG n (nub (map fst calls)) -- plus names in type!
                                    addIBC (IBCCG n)
                             _ -> return ()
 --                         addIBC (IBCTotal n tot)
@@ -545,15 +553,20 @@ elabClass info syn fc constraints tn ps ds
          let constraint = PApp fc (PRef fc tn)
                                   (map (pexp . PRef fc) (map fst ps))
          -- build data declaration
-         ims <- mapM tdecl (filter tydecl ds)
+         let mdecls = filter tydecl ds -- method declarations
+         let mnames = map getMName mdecls
+         logLvl 2 $ "Building methods " ++ show mnames
+         ims <- mapM (tdecl mnames) mdecls
          defs <- mapM (defdecl (map (\ (x,y,z) -> z) ims) constraint) 
                       (filter clause ds)
          let (methods, imethods) = unzip (map (\ (x,y,z) -> (x, y)) ims)
          let cty = impbind ps $ conbind constraints $ pibind methods constraint
          let cons = [(cn, cty, fc)]
-         let ddecl = PData syn fc (PDatadecl tn tty cons)
-         elabDecl info ddecl
+         let ddecl = PDatadecl tn tty cons
+         logLvl 5 $ "Class data " ++ showDImp True ddecl
+         elabData info (syn { no_imp = no_imp syn ++ mnames }) fc ddecl
          -- for each constraint, build a top level function to chase it
+         logLvl 5 $ "Building functions"
          let usyn = syn { using = ps ++ using syn }
          fns <- mapM (cfun cn constraint usyn (map fst imethods)) constraints
          mapM_ (elabDecl info) (concat fns)
@@ -574,11 +587,14 @@ elabClass info syn fc constraints tn ps ds
     conbind (ty : ns) x = PPi constraint (MN 0 "c") ty (conbind ns x)
     conbind [] x = x
 
-    tdecl (PTy syn _ o n t) = do t' <- implicit syn n t
-                                 return ( (n, (toExp (map fst ps) Exp t')),
-                                          (n, (o, (toExp (map fst ps) Imp t'))),
-                                          (n, (syn, o, t) ) )
-    tdecl _ = fail "Not allowed in a class declaration"
+    getMName (PTy _ _ _ n _) = nsroot n
+    tdecl allmeths (PTy syn _ o n t) 
+           = do t' <- implicit' syn allmeths n t
+                logLvl 5 $ "Method " ++ show n ++ " : " ++ showImp True t'
+                return ( (n, (toExp (map fst ps) Exp t')),
+                         (n, (o, (toExp (map fst ps) Imp t'))),
+                         (n, (syn, o, t) ) )
+    tdecl _ _ = fail "Not allowed in a class declaration"
 
     -- Create default definitions 
     defdecl mtys c d@(PClauses fc opts n cs) =

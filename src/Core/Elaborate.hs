@@ -435,13 +435,21 @@ try t1 t2 = do s <- get
                case runStateT t1 s of
                     OK (v, s') -> do put s'
                                      return v
-                    Error e1 -> do put s
-                                   case runStateT t2 s of
-                                     OK (v, s') -> do put s'; return v
-                                     Error e2 -> if score e1 > score e2 
-                                                    then lift (tfail e1) 
-                                                    else lift (tfail e2)
-                        
+                    Error e1 -> if recoverableErr e1 then
+                                   do case runStateT t2 s of
+                                         OK (v, s') -> do put s'; return v
+                                         Error e2 -> if score e1 > score e2 
+                                                        then lift (tfail e1) 
+                                                        else lift (tfail e2)
+                                   else lift (tfail e1)
+  where recoverableErr (CantUnify r _ _ _ _ _) = r
+        recoverableErr _ = True
+
+tryWhen :: Bool -> Elab' aux a -> Elab' aux a -> Elab' aux a
+tryWhen True a b = try a b
+tryWhen False a b = a
+
+
 -- Try a selection of tactics. Exactly one must work, all others must fail
 tryAll :: [(Elab' aux a, String)] -> Elab' aux a
 tryAll xs = tryAll' [] (cantResolve, 0) (map fst xs)

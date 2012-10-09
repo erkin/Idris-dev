@@ -75,7 +75,7 @@ pshow i (Msg s) = s
 pshow i (InternalMsg s) = "INTERNAL ERROR: " ++ show s ++ 
    "\nThis is probably a bug, or a missing error message.\n" ++
    "Please consider reporting at " ++ bugaddr
-pshow i (CantUnify x y e sc s) 
+pshow i (CantUnify _ x y e sc s) 
     = "Can't unify " ++ show (delab i x)
         ++ " with " ++ show (delab i y) ++
 --         " (" ++ show x ++ " and " ++ show y ++ ") " ++
@@ -94,6 +94,7 @@ pshow i (NotInjective p x y) = "Can't verify injectivity of " ++ show (delab i p
                                                     show (delab i y)
 pshow i (CantResolve c) = "Can't resolve type class " ++ show (delab i c)
 pshow i (CantResolveAlts as) = "Can't disambiguate name: " ++ showSep ", " as
+pshow i (NoTypeDecl n) = "No type declaration for " ++ show n
 pshow i (NoSuchVariable n) = "No such variable " ++ show n
 pshow i (IncompleteTerm t) = "Incomplete term " ++ show (delab i t)
 pshow i UniverseError = "Universe inconsistency"

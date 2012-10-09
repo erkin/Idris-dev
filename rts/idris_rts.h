@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <pthread.h>
 
 // Closures
 
@@ -45,6 +46,20 @@ typedef struct {
     char* heap_next;
     char* heap_end;
     VAL* stack_max;
+   
+    pthread_mutex_t inbox_lock;
+    pthread_mutex_t inbox_block;
+    pthread_cond_t inbox_waiting;
+
+    VAL* inbox; // Block of memory for storing messages
+    VAL* inbox_end; // End of block of memory
+
+    VAL* inbox_ptr; // Next message to read
+    VAL* inbox_write; // Location of next message to write
+
+    int argc;
+    VAL* argv; // command line arguments
+
     size_t heap_size;
     size_t heap_growth;
     int allocations;
@@ -53,7 +68,10 @@ typedef struct {
     VAL reg1;
 } VM;
 
-VM* init_vm(int stack_size, size_t heap_size);
+// Create a new VM
+VM* init_vm(int stack_size, size_t heap_size, int argc, char* argv[]);
+// Clean up a VM once it's no longer needed
+void terminate(VM* vm);
 
 // Functions all take a pointer to their VM, and previous stack base, 
 // and return nothing.
@@ -72,7 +90,7 @@ typedef void(*func)(VM*, VAL*);
 #define GETPTR(x) (((VAL)(x))->info.ptr) 
 #define GETFLOAT(x) (((VAL)(x))->info.f)
 
-#define TAG(x) (ISINT(x) ? (-1) : ( (x)->ty == CON ? (x)->info.c.tag : (-1)) )
+#define TAG(x) (ISINT(x) || x == NULL ? (-1) : ( (x)->ty == CON ? (x)->info.c.tag : (-1)) )
 
 // Integers, floats and operators
 
@@ -83,7 +101,7 @@ typedef intptr_t i_int;
 #define ISINT(x) ((((i_int)x)&1) == 1)
 
 #define INTOP(op,x,y) MKINT((i_int)((((i_int)x)>>1) op (((i_int)y)>>1)))
-#define FLOATOP(op,x,y) MKFLOAT(((GETFLOAT(x)) op (GETFLOAT(y))))
+#define FLOATOP(op,x,y) MKFLOAT(vm, ((GETFLOAT(x)) op (GETFLOAT(y))))
 #define FLOATBOP(op,x,y) MKINT((i_int)(((GETFLOAT(x)) op (GETFLOAT(y)))))
 #define ADD(x,y) (void*)(((i_int)x)+(((i_int)y)-1))
 #define MULT(x,y) (MKINT((((i_int)x)>>1) * (((i_int)y)>>1)))
@@ -111,12 +129,23 @@ VAL MKCON(VM* vm, VAL cl, int tag, int arity, ...);
 
 #define SETTAG(x, a) (x)->info.c.tag = (a)
 #define SETARG(x, i, a) ((x)->info.c.args)[i] = ((VAL)(a))
+#define GETARG(x, i) ((x)->info.c.args)[i]
 
 void PROJECT(VM* vm, VAL r, int loc, int arity); 
 void SLIDE(VM* vm, int args);
 
 void* allocate(VM* vm, size_t size);
 void* allocCon(VM* vm, int arity);
+
+void* vmThread(VM* callvm, func f, VAL arg);
+
+// Copy a structure to another vm's heap
+VAL copyTo(VM* newVM, VAL x);
+
+// Add a message to another VM's message queue
+void sendMessage(VM* sender, VM* dest, VAL msg);
+// block until there is a message in the queue
+VAL recvMessage(VM* vm);
 
 void dumpVal(VAL r);
 void dumpStack(VM* vm);
@@ -144,6 +173,11 @@ VAL idris_strTail(VM* vm, VAL str);
 VAL idris_strCons(VM* vm, VAL x, VAL xs);
 VAL idris_strIndex(VM* vm, VAL str, VAL i);
 VAL idris_strRev(VM* vm, VAL str);
+
+// Command line args
+
+int idris_numArgs(VM* vm);
+VAL idris_getArg(VM* vm, int i);
 
 // Handle stack overflow. 
 // Just reports an error and exits.

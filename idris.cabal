@@ -1,5 +1,5 @@
 Name:           idris
-Version:        0.9.3
+Version:        0.9.4.2
 License:        BSD3
 License-file:   LICENSE
 Author:         Edwin Brady
@@ -42,9 +42,10 @@ Build-type:     Custom
 
 Data-files:            rts/libidris_rts.a rts/idris_rts.h rts/idris_gc.h
                        rts/idris_stdfgn.h rts/idris_main.c rts/idris_gmp.h
+                       rts/libtest.c
 Extra-source-files:    lib/Makefile  lib/*.idr lib/prelude/*.idr lib/network/*.idr
                        lib/control/monad/*.idr lib/language/*.idr
-                       tutorial/examples/*.idr
+                       tutorial/examples/*.idr lib/base.ipkg
                        rts/*.c rts/*.h rts/Makefile
 
 source-repository head
@@ -68,11 +69,13 @@ Executable     idris
                               Idris.Coverage, Idris.IBC, Idris.Unlit,
                               Idris.DataOpts, Idris.Transforms, Idris.DSL, 
 
-                              Util.Pretty,
+                              Util.Pretty, Util.System,
+                              Pkg.Package, Pkg.PParser,
 
                               IRTS.Lang, IRTS.LParser, IRTS.Bytecode, IRTS.Simplified,
-                              IRTS.CodegenC, IRTS.Defunctionalise, IRTS.Compiler,
-                              IRTS.CodegenLLVM
+                              IRTS.CodegenC, IRTS.Defunctionalise, IRTS.Inliner,
+                              IRTS.Compiler, IRTS.CodegenJava, IRTS.BCImp,
+                              IRTS.CodegenLLVM,
 
                               Paths_idris
 

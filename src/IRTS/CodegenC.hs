@@ -1,4 +1,4 @@
-module IRTS.CodegenC (codegen) where
+module IRTS.CodegenC (codegenC) where
 
 import IRTS.Bytecode
 import IRTS.Lang
@@ -6,24 +6,31 @@ import IRTS.Simplified
 import IRTS.CodegenCommon
 import Core.TT
 import Paths_idris
+import Util.System
 
 import Data.Char
 import System.Process
 import System.Exit
 import System.IO
 import System.Directory
-import System.Environment
 import Control.Monad
 
-codegen :: Codegen
-codegen defs out exec libs dbg
+codegenC :: [(Name, SDecl)] ->
+            String -> -- output file name
+            OutputType ->   -- generate executable if True, only .o if False 
+            [FilePath] -> -- include files
+            String -> -- extra object files 
+            String -> -- extra compiler flags
+            DbgLevel ->
+            IO ()
+codegenC defs out exec incs objs libs dbg
     = do -- print defs
          let bc = map toBC defs
          let h = concatMap toDecl (map fst bc)
          let cc = concatMap (uncurry toC) bc
          d <- getDataDir
          mprog <- readFile (d ++ "/rts/idris_main.c")
-         let cout = headers ["math.h"] ++ debug dbg ++ h ++ cc ++ 
+         let cout = headers incs ++ debug dbg ++ h ++ cc ++ 
                      (if (exec == Executable) then mprog else "")
          case exec of
            Raw -> writeFile out cout
@@ -32,18 +39,19 @@ codegen defs out exec libs dbg
              hPutStr tmph cout
              hFlush tmph
              hClose tmph
-             let gcc = "gcc -x c " ++ 
-                       (if (exec == Executable) then "" else "-c ") ++
+             let useclang = False
+             comp <- getCC
+             let gcc = comp ++ " -I. " ++ objs ++ " -x c " ++ 
+                       (if (exec == Executable) then "" else " -c ") ++
                        gccDbg dbg ++
                        " " ++ tmpn ++
                        " `idris --link` `idris --include` " ++ libs ++
-                       " -lidris_rts -lgmp -o " ++ out
-             -- putStrLn cout
+                       " -o " ++ out
              exit <- system gcc
              when (exit /= ExitSuccess) $
                 putStrLn ("FAILURE: " ++ gcc)
 
-headers [] = "#include <idris_rts.h>\n#include <idris_stdfgn.h>\n#include<assert.h>\n"
+headers [] = "#include <idris_rts.h>\n#include <idris_stdfgn.h>\n#include <assert.h>\n"
 headers (x : xs) = "#include <" ++ x ++ ">\n" ++ headers xs
 
 debug TRACE = "#define IDRIS_TRACE\n\n"
@@ -102,6 +110,8 @@ bcc i (MKCON l tag args)
 
 bcc i (PROJECT l loc a) = indent i ++ "PROJECT(vm, " ++ creg l ++ ", " ++ show loc ++ 
                                       ", " ++ show a ++ ");\n"
+bcc i (PROJECTINTO r t idx)
+    = indent i ++ creg r ++ " = GETARG(" ++ creg t ++ ", " ++ show idx ++ ");\n" 
 bcc i (CASE r code def) 
     = indent i ++ "switch(TAG(" ++ creg r ++ ")) {\n" ++
       concatMap (showCase i) code ++
@@ -139,12 +149,13 @@ bcc i (FOREIGNCALL l LANG_C rty fn args)
         c_irts rty (creg l ++ " = ") 
                    (fn ++ "(" ++ showSep "," (map fcall args) ++ ")") ++ ";\n"
     where fcall (t, arg) = irts_c t (creg arg)
+bcc i (NULL r) = indent i ++ creg r ++ " = NULL;\n" -- clear, so it'll be GCed
 bcc i (ERROR str) = indent i ++ "fprintf(stderr, " ++ show str ++ "); assert(0); exit(-1);"
 -- bcc i _ = indent i ++ "// not done yet\n"
 
 c_irts FInt l x = l ++ "MKINT((i_int)(" ++ x ++ "))"
 c_irts FChar l x = l ++ "MKINT((i_int)(" ++ x ++ "))"
-c_irts FString l x = l ++ "MKSTR(" ++ x ++ ")"
+c_irts FString l x = l ++ "MKSTR(vm, " ++ x ++ ")"
 c_irts FUnit l x = x
 c_irts FPtr l x = l ++ "MKPTR(vm, " ++ x ++ ")"
 c_irts FDouble l x = l ++ "MKFLOAT(vm, " ++ x ++ ")"
@@ -168,7 +179,7 @@ doOp v LLe [l, r] = v ++ "INTOP(<=," ++ creg l ++ ", " ++ creg r ++ ")"
 doOp v LGt [l, r] = v ++ "INTOP(>," ++ creg l ++ ", " ++ creg r ++ ")"
 doOp v LGe [l, r] = v ++ "INTOP(>=," ++ creg l ++ ", " ++ creg r ++ ")"
 
-doOp v LFPlus [l, r] = v ++ "FLOATOP(+" ++ creg l ++ ", " ++ creg r ++ ")"
+doOp v LFPlus [l, r] = v ++ "FLOATOP(+," ++ creg l ++ ", " ++ creg r ++ ")"
 doOp v LFMinus [l, r] = v ++ "FLOATOP(-," ++ creg l ++ ", " ++ creg r ++ ")"
 doOp v LFTimes [l, r] = v ++ "FLOATOP(*" ++ creg l ++ ", " ++ creg r ++ ")"
 doOp v LFDiv [l, r] = v ++ "FLOATOP(/," ++ creg l ++ ", " ++ creg r ++ ")"
@@ -230,5 +241,7 @@ doOp v LStdIn [] = v ++ "MKPTR(vm, stdin)"
 doOp v LStdOut [] = v ++ "MKPTR(vm, stdout)"
 doOp v LStdErr [] = v ++ "MKPTR(vm, stderr)"
 
+doOp v LFork [x] = v ++ "MKPTR(vm, vmThread(vm, " ++ cname (MN 0 "EVAL") ++ ", " ++ creg x ++ "))"
+doOp v LVMPtr [] = v ++ "MKPTR(vm, vm)"
 doOp v LNoOp [x] = ""
 doOp _ _ _ = "FAIL"
