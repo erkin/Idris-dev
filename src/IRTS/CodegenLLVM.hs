@@ -79,7 +79,8 @@ buildMain m entryPoint
               [L.constInt L.int32Type 4096000 True, L.constInt L.int64Type 2048000 True] ""
         maybeRunMain <- L.getNamedFunction m (llname entryPoint)
         case maybeRunMain of
-          Just runMain -> L.buildCall b runMain [vm] ""
+          Just runMain -> do call <- L.buildCall b runMain [vm] ""
+                             L.setInstructionCallConv call L.Fast
           Nothing -> fail $ "Internal error: missing entry point: " ++ (show entryPoint)
         L.buildRet b $ L.constInt L.int32Type 0 True
         return ()
@@ -276,7 +277,7 @@ llname n = "_idris_" ++ (show n)
 toLLVMDecl :: Prims -> L.Module -> SDecl -> IO L.Value
 toLLVMDecl p m (SFun name args _ _)
     = do f <- L.addFunction m (llname name) $ idrFuncTy p $ length args
-         unless (name == (MN 0 "runMain")) $ L.setFunctionCallConv f L.Fast
+         L.setFunctionCallConv f L.Fast
          ps <- L.getParams f
          L.setValueName (head ps) "VM"
          mapM (uncurry L.setValueName) $ zip (tail ps) (map show args)
@@ -551,7 +552,7 @@ toLLVMExp p m f b vm s (SCase var alts')
          case (defaultExit, defaultVal) of
            (Just exit, Just val) ->
                do unreachable <- L.isUnreachable val
-                  unless unreachable $ void $ L.addIncoming phi [(val, exit)]
+                  unless unreachable $ L.addIncoming phi [(val, exit)]
            _ -> return ()
          return phi
 toLLVMExp p m f b vm s (SConst const)
