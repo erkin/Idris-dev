@@ -22,39 +22,37 @@ import Control.Monad
 codegen :: Codegen
 codegen defs out exec flags dbg
     = L.withModule "" $ \m -> do
-        let opt = "-O3"
         prims <- declarePrimitives m
         decls <- mapM (toLLVMDecl prims m . snd) defs
+        mapM (\f -> L.setLinkage f L.InternalLinkage) decls
         mapM_ (toLLVMDef prims m . snd) defs
-        when (exec == Executable) $
-             do mapM (\f -> L.setLinkage f L.InternalLinkage) decls
-                buildMain m (MN 0 "runMain")
+        buildMain m (MN 0 "runMain")
         error <- L.verifyModule m
         case error of
           Nothing  -> case exec of
                         Raw -> L.printModuleToFile m out
-                        Object -> buildObj m opt out
+                        Object -> buildObj m out
                         Executable ->
                             withTmpFile $ \obj -> do
-                                  buildObj m opt obj
+                                  buildObj m obj
                                   rtsDir <- fmap (++ "/rts") getDataDir
-                                  exit <- rawSystem "gcc" [ opt, obj
+                                  exit <- rawSystem "gcc" [ obj, "-O3"
                                                           , "-L" ++ rtsDir
                                                           , "-lidris_rts", "-lgmp", "-lm"
                                                           , "-lidris_llvm_main"
                                                           , "-o", out
                                                           ]
                                   when (exit /= ExitSuccess) $ fail "FAILURE: Linking"
-          Just msg -> L.dumpModule m >> fail msg
+          Just msg -> fail msg
     where
-      writeBc m opt dest
+      writeBc m dest
           = do L.writeBitcodeToFile m dest
-               exit <- rawSystem "opt" ["-std-compile-opts", "-std-link-opts", opt, "-o", dest, dest]
+               exit <- rawSystem "opt" ["-std-compile-opts", "-std-link-opts", "-O3", "-o", dest, dest]
                when (exit /= ExitSuccess) $ fail "FAILURE: Bitcode optimization"
-      buildObj m opt dest
+      buildObj m dest
           = withTmpFile $ \bitcode -> do
-              writeBc m opt bitcode
-              exit <- rawSystem "llc" ["-filetype=obj", opt, "-o", dest, bitcode]
+              writeBc m bitcode
+              exit <- rawSystem "llc" ["-filetype=obj", "-O3", "-o", dest, bitcode]
               when (exit /= ExitSuccess) $ fail "FAILURE: Object file output"
 
       withTmpFile :: (FilePath -> IO a) -> IO a
@@ -671,6 +669,6 @@ toLLVMExp p m f b vm s (SOp prim vars)
                   f <- L.buildFPToSI b x L.int32Type ""
                   buildFloat p b vm f
            LNoOp -> return $ L.getUndef $ L.pointerType (valTy p) 0
-           _ -> L.dumpModule m >> (fail $ "Unimplemented primitive operator: " ++ show prim)
+           _ -> fail $ "Unimplemented primitive operator: " ++ show prim
 toLLVMExp p m f b vm s (SError message)
     = buildError p b message
