@@ -279,14 +279,18 @@ parseProg syn fname input pos
 collect :: [PDecl] -> [PDecl]
 collect (c@(PClauses _ o _ _) : ds) 
     = clauses (cname c) [] (c : ds)
-  where clauses n acc (PClauses fc _ _ [PClause fc' n' l ws r w] : ds)
-           | n == n' = clauses n (PClause fc' n' l ws r (collect w) : acc) ds
-        clauses n acc (PClauses fc _ _ [PWith fc' n' l ws r w] : ds)
-           | n == n' = clauses n (PWith fc' n' l ws r (collect w) : acc) ds
-        clauses n acc xs = PClauses (getfc c) o n (reverse acc) : collect xs
+  where clauses j@(Just n) acc (PClauses fc _ _ [PClause fc' n' l ws r w] : ds)
+           | n == n' = clauses j (PClause fc' n' l ws r (collect w) : acc) ds
+        clauses j@(Just n) acc (PClauses fc _ _ [PWith fc' n' l ws r w] : ds)
+           | n == n' = clauses j (PWith fc' n' l ws r (collect w) : acc) ds
+        clauses (Just n) acc xs = PClauses (getfc c) o n (reverse acc) : collect xs
+        clauses Nothing acc (x:xs) = collect xs
+        clauses Nothing acc [] = []
 
-        cname (PClauses fc _ _ [PClause _ n _ _ _ _]) = n
-        cname (PClauses fc _ _ [PWith   _ n _ _ _ _]) = n
+        cname (PClauses fc _ _ [PClause _ n _ _ _ _]) = Just n
+        cname (PClauses fc _ _ [PWith   _ n _ _ _ _]) = Just n
+        cname (PClauses fc _ _ [PClauseR _ _ _ _]) = Nothing
+        cname (PClauses fc _ _ [PWithR _ _ _ _]) = Nothing
         getfc (PClauses fc _ _ _) = fc
 
 collect (PParams f ns ps : ds) = PParams f ns (collect ps) : collect ds
@@ -401,9 +405,13 @@ pSynSym = try (do lchar '['; n <- pName; lchar ']'
 
 pFunDecl' :: SyntaxInfo -> IParser PDecl
 pFunDecl' syn = try (do pushIndent
-                        opts <- pFnOpts
+                        ist <- getState
+                        let initOpts = if default_total ist
+                                          then [TotalFn]
+                                          else []
+                        opts <- pFnOpts initOpts
                         acc <- pAccessibility
-                        opts' <- pFnOpts
+                        opts' <- pFnOpts opts
                         n_in <- pfName
                         let n = expandNS syn n_in
                         ty <- pTSig (impOK syn)
@@ -411,7 +419,7 @@ pFunDecl' syn = try (do pushIndent
                         pTerminator 
 --                         ty' <- implicit syn n ty
                         addAcc n acc
-                        return (PTy syn fc (opts ++ opts') n ty))
+                        return (PTy syn fc opts' n ty))
             <|> try (pPattern syn)
             <|> try (pCAF syn)
 
@@ -426,11 +434,11 @@ pUsing syn =
 
 pParams :: SyntaxInfo -> IParser [PDecl]
 pParams syn = 
-    do reserved "params"; lchar '('; ns <- tyDeclList syn; lchar ')'
-       lchar '{'
+    do reserved "parameters"; lchar '('; ns <- tyDeclList syn; lchar ')'
+       openBlock 
        let pvars = syn_params syn
        ds <- many1 (pDecl syn { syn_params = pvars ++ ns })
-       lchar '}'
+       closeBlock 
        fc <- pfc
        return [PParams fc ns (concat ds)]
 
@@ -608,6 +616,11 @@ pOpFront = maybeWithNS pOpFrontNoNS False []
 pfName = try pOpFront
          <|> pName
 
+pTotality :: IParser Bool
+pTotality
+        = do reserved "total";   return True
+      <|> do reserved "partial"; return False
+
 pAccessibility' :: IParser Accessibility
 pAccessibility'
         = do reserved "public";   return Public
@@ -619,16 +632,17 @@ pAccessibility
         = do acc <- pAccessibility'; return (Just acc)
       <|> return Nothing
 
-pFnOpts :: IParser [FnOpt]
-pFnOpts = do reserved "total"; xs <- pFnOpts; return (TotalFn : xs)
-      <|> try (do lchar '%'; reserved "export"; c <- strlit; xs <- pFnOpts
-                  return (CExport c : xs))
-      <|> do lchar '%'; reserved "assert_total"; xs <- pFnOpts; return (AssertTotal : xs)
+pFnOpts :: [FnOpt] -> IParser [FnOpt]
+pFnOpts opts
+        = do reserved "total"; pFnOpts (TotalFn : opts)
+      <|> do reserved "partial"; pFnOpts (opts \\ [TotalFn])
+      <|> try (do lchar '%'; reserved "export"; c <- strlit; 
+                  pFnOpts (CExport c : opts))
+      <|> do lchar '%'; reserved "assert_total"; pFnOpts (AssertTotal : opts)
       <|> do lchar '%'; reserved "specialise"; 
              lchar '['; ns <- sepBy pfName (lchar ','); lchar ']'
-             xs <- pFnOpts
-             return (Specialise ns : xs)
-      <|> return []
+             pFnOpts (Specialise ns : opts)
+      <|> return opts
 
 addAcc :: Name -> Maybe Accessibility -> IParser ()
 addAcc n a = do i <- getState
@@ -661,7 +675,10 @@ pTacticsExpr syn = do
 pSimpleExpr syn = 
         try (do symbol "!["; t <- pTerm; lchar ']'; return $ PQuote t)
         <|> do lchar '?'; x <- pName; return (PMetavar x)
-        <|> do reserved "refl"; fc <- pfc; return (PRefl fc)
+        <|> do reserved "refl"; fc <- pfc; 
+               tm <- option Placeholder (do lchar '{'; t <- pExpr syn; lchar '}';
+                                            return t)
+               return (PRefl fc tm)
 --         <|> do reserved "return"; fc <- pfc; return (PReturn fc)
         <|> pProofExpr syn 
         <|> pTacticsExpr syn
@@ -1072,9 +1089,12 @@ pRecord syn = do acc <- pAccessibility
     toFreeze (Just Frozen) = Just Hidden
     toFreeze x = x
 
+pDataI = do reserved "data"; return False
+     <|> do reserved "codata"; return True
+
 pData :: SyntaxInfo -> IParser PDecl
 pData syn = try (do acc <- pAccessibility
-                    reserved "data"
+                    co <- pDataI
                     fc <- pfc
                     tyn_in <- pfName
                     ty <- pTSig (impOK syn)
@@ -1089,10 +1109,10 @@ pData syn = try (do acc <- pAccessibility
                     popIndent
                     closeBlock 
                     accData acc tyn (map (\ (n, _, _) -> n) cons)
-                    return $ PData syn fc (PDatadecl tyn ty cons))
+                    return $ PData syn fc co (PDatadecl tyn ty cons))
         <|> try (do pushIndent
                     acc <- pAccessibility
-                    reserved "data"
+                    co <- pDataI
                     fc <- pfc
                     tyn_in <- pfName
                     args <- many pName
@@ -1106,7 +1126,7 @@ pData syn = try (do acc <- pAccessibility
                                  do let cty = bindArgs cargs conty
                                     return (x, cty, cfc)) cons
                     accData acc tyn (map (\ (n, _, _) -> n) cons')
-                    return $ PData syn fc (PDatadecl tyn ty cons'))
+                    return $ PData syn fc co (PDatadecl tyn ty cons'))
   where
     mkPApp fc t [] = t
     mkPApp fc t xs = PApp fc t (map pexp xs)
@@ -1330,7 +1350,7 @@ pWExpr syn = do lchar '|'
 pWhereblock :: Name -> SyntaxInfo -> IParser ([PDecl], [(Name, Name)])
 pWhereblock n syn 
     = do reserved "where"; openBlock
-         ds <- many1 $ pFunDecl syn
+         ds <- many1 $ pDecl syn
          let dns = concatMap (concatMap declared) ds
          closeBlock
          return (concat ds, map (\x -> (x, decoration syn x)) dns)
@@ -1356,6 +1376,11 @@ pDirective = try (do lchar '%'; reserved "lib"; lib <- strlit;
          <|> try (do lchar '%'; reserved "access"; acc <- pAccessibility'
                      return [PDirective (do i <- getIState
                                             putIState (i { default_access = acc }))])
+         <|> try (do lchar '%'; reserved "default"; tot <- pTotality
+                     i <- getState
+                     setState (i { default_total = tot } )
+                     return [PDirective (do i <- getIState
+                                            putIState (i { default_total = tot }))])
          <|> try (do lchar '%'; reserved "logging"; i <- natural;
                      return [PDirective (setLogLevel (fromInteger i))])
 

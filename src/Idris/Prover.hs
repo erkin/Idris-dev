@@ -46,7 +46,7 @@ prove ctxt lit n ty
          i <- get
          let proofs = proof_list i
          put (i { proof_list = (n, prf) : proofs })
-         let tree = simpleCase False True False (FC "proof" 0) [([], P Ref n ty, tm)]
+         let tree = simpleCase False True CompileTime (FC "proof" 0) [([], P Ref n ty, tm)]
          logLvl 3 (show tree)
          (ptm, pty) <- recheckC (FC "proof" 0) [] tm
          ptm' <- applyOpts ptm
@@ -60,9 +60,9 @@ elabStep st e = do case runStateT e st of
                                    fail (pshow i a)
 
 dumpState :: IState -> ProofState -> IO ()
-dumpState ist (PS nm [] _ tm _ _ _ _ _ _ _ _ _ _ _) =
+dumpState ist (PS nm [] _ tm _ _ _ _ _ _ _ _ _ _ _ _) =
   putStrLn . render $ pretty nm <> colon <+> text "No more goals."
-dumpState ist ps@(PS nm (h:hs) _ tm _ _ _ _ problems i _ _ ctxy _ _) = do
+dumpState ist ps@(PS nm (h:hs) _ tm _ _ _ _ _ problems i _ _ ctxy _ _) = do
   let OK ty  = goalAtFocus ps
   let OK env = envAtFocus ps
   putStrLn . render $

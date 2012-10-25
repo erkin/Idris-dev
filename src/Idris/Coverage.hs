@@ -14,6 +14,128 @@ import Data.List
 import Data.Either
 import Debug.Trace
 
+import Control.Monad.State
+
+-- Generate the LHSes which are missing from a case tree
+-- Eliminate the ones which cannot be well typed
+
+genMissing :: Name -> [Name] -> SC -> Idris [PTerm] 
+genMissing fn args sc 
+   = do sc' <- expandTree sc
+        logLvl 5 $ "Checking missing cases for " ++ show fn ++ "\n" ++ (show sc')
+        (got, missing) <- gm fn (map (\x -> P Bound x Erased) args) sc'
+        return $ filter (\x -> not (x `elem` got)) missing
+
+-- Make a term to feed to the pattern matcher from a LHS declared impossible
+-- (we can't type check it, but we need the case analysis to check for covering...)
+
+mkPatTm :: PTerm -> Idris Term
+mkPatTm t = do i <- get
+               let timp = addImpl' True [] i t
+               evalStateT (toTT timp) 0
+  where
+    toTT (PRef _ n) = do i <- lift $ get
+                         case lookupDef Nothing n (tt_ctxt i) of
+                              [TyDecl nt _] -> return $ P nt n Erased
+                              _ -> return $ P Ref n Erased
+    toTT (PApp _ t args) = do t' <- toTT t
+                              args' <- mapM (toTT . getTm) args
+                              return $ mkApp t' args'
+    toTT _ = do v <- get 
+                put (v + 1)
+                return (P Bound (MN v "imp") Erased) 
+
+mkPTerm :: Name -> [TT Name] -> Idris PTerm
+mkPTerm f args = do i <- get
+                    let fapp = mkApp (P Bound f Erased) (map eraseName args)
+                    return $ delab i fapp
+  where eraseName (App f a) = App (eraseName f) (eraseName a)
+        eraseName (P _ (MN _ _) _) = Erased
+        eraseName t                = t
+
+gm :: Name -> [TT Name] -> SC -> Idris ([PTerm], [PTerm])
+gm fn args (Case n alts) = do m <- mapM (gmAlt fn args n) alts
+                              let (got, missing) = unzip m
+                              return (concat got, concat missing)
+gm fn args (STerm tm)    = do logLvl 3 ("Covered: " ++ show args)
+                              t <- mkPTerm fn args
+                              return ([t], [])
+gm fn args ImpossibleCase = do logLvl 3 ("Impossible: " ++ show args)
+                               t <- mkPTerm fn args
+                               return ([], [])
+gm fn args (UnmatchedCase _) = do logLvl 3 ("Missing: " ++ show args)
+                                  t <- mkPTerm fn args
+                                  return ([], [t])
+
+gmAlt fn args n (ConCase cn t cargs sc)
+   = do let args' = map (subst n (mkApp (P Bound cn Erased)
+                                        (map (\x -> P Bound x Erased) cargs))) args
+        gm fn args' sc
+gmAlt fn args n (ConstCase c sc)
+   = do let args' = map (subst n (Constant c)) args
+        gm fn args' sc
+gmAlt fn args n (DefaultCase sc)
+   = do gm fn args sc
+
+getDefault (DefaultCase sc : _) = sc
+getDefault (_ : cs) = getDefault cs
+getDefault [] = UnmatchedCase ""
+
+dropDefault (DefaultCase sc : rest) = dropDefault rest
+dropDefault (c : cs) = c : dropDefault cs
+dropDefault [] = [] 
+
+expandTree :: SC -> Idris SC
+expandTree (Case n alts) = do i <- get
+                              as <- expandAlts i (dropDefault alts) (getDefault alts)
+                              alts' <- mapM expandTreeA as
+                              return (Case n alts')
+    where expandTreeA (ConCase n i ns sc) = do sc' <- expandTree sc
+                                               return (ConCase n i ns sc')
+          expandTreeA (ConstCase i sc) = do sc' <- expandTree sc
+                                            return (ConstCase i sc')
+          expandTreeA (DefaultCase sc) = do sc' <- expandTree sc
+                                            return (DefaultCase sc')
+expandTree t = return t
+
+expandAlts :: IState -> [CaseAlt] -> SC -> Idris [CaseAlt]
+expandAlts i all@(ConstCase c _ : alts) def
+    = return $ all ++ [DefaultCase def]
+expandAlts i all@(ConCase n _ _ _ : alts) def
+    | (TyDecl c@(DCon _ arity) ty : _) <- lookupDef Nothing n (tt_ctxt i)
+         = do let tyn = getTy n (tt_ctxt i)
+              case lookupCtxt Nothing tyn (idris_datatypes i) of
+                  (TI ns _ : _) -> do let ps = map mkPat ns
+                                      return $ addAlts ps (altsFor all) all
+                  _ -> return all
+  where
+    altsFor [] = []
+    altsFor (ConCase n _ _ _ : alts) = n : altsFor alts
+    altsFor (_ : alts) = altsFor alts
+
+    addAlts [] got alts = alts
+    addAlts ((n, arity) : ps) got alts
+        | n `elem` got = addAlts ps got alts
+        | otherwise = addAlts ps got (alts ++ [ConCase n (-1) (argList arity) def])
+
+    argList i = take i (map (\x -> (MN x "ign")) [0..])
+
+    getTy n ctxt = case lookupTy Nothing n ctxt of
+                          (t : _) -> case unApply (getRetTy t) of
+                                        (P _ tyn _, _) -> tyn
+                                        x -> error $ "Can't happen getTy 1 " ++ show (n, x)
+                          _ -> error "Can't happen getTy 2"
+
+    mkPat x = case lookupCtxt Nothing x (idris_implicits i) of
+                    (pargs : _)
+                       -> (x, length pargs)  
+                    _ -> error "Can't happen - genAll"
+expandAlts i alts def = return alts 
+        
+
+
+-- OLD STUFF: probably broken...
+
 -- Given a list of LHSs, generate a extra clauses which cover the remaining
 -- cases. The ones which haven't been provided are marked 'absurd' so that the
 -- checker will make sure they can't happen.
@@ -96,7 +218,7 @@ genAll i args = case filter (/=Placeholder) $ concatMap otherPats (nub args) of
                  let p = PApp fc (PRef fc n) (zipWith upd xs' xs)
                  let tyn = getTy n (tt_ctxt i)
                  case lookupCtxt Nothing tyn (idris_datatypes i) of
-                         (TI ns : _) -> p : map (mkPat fc) (ns \\ [n])
+                         (TI ns _ : _) -> p : map (mkPat fc) (ns \\ [n])
                          _ -> [p]
     ops fc n arg o = return Placeholder
 
@@ -140,17 +262,54 @@ checkPositive n (cn, ty)
 data LexOrder = LexXX | LexEQ | LexLT
     deriving (Show, Eq, Ord)
 
+calcProd :: IState -> FC -> Name -> [([Name], Term, Term)] -> Idris Totality
+calcProd i fc n pats = do patsprod <- mapM prodRec pats
+                          if (and patsprod) 
+                             then return Productive
+                             else return (Partial NotProductive)
+   where
+     -- every application of n must be in an argument of a coinductive constructor
+
+     prodRec :: ([Name], Term, Term) -> Idris Bool
+     prodRec (_, _, tm) = prod False tm 
+
+     prod ok ap@(App _ _)
+        | (P _ (UN "lazy") _, [_, arg]) <- unApply ap = prod ok arg
+        | (P _ f ty, args) <- unApply ap
+            = let co = cotype ty in
+                  if f == n 
+                     then do argsprod <- mapM (prod co) args
+                             return (and (ok : argsprod) )
+                     else do argsprod <- mapM (prod co) args
+                             return (and argsprod)
+     prod ok (App f a) = liftM2 (&&) (prod False f) (prod False a)
+     prod ok (Bind _ (Let t v) sc) = liftM2 (&&) (prod False v) (prod False v)
+     prod ok (Bind _ b sc) = prod ok sc
+     prod ok t = return True 
+    
+     cotype ty 
+        | (P _ t _, _) <- unApply (getRetTy ty)
+            = case lookupCtxt Nothing t (idris_datatypes i) of
+                   [TI _ True] -> True
+                   _ -> False
+        | otherwise = False
+
 calcTotality :: [Name] -> FC -> Name -> [([Name], Term, Term)] -> Idris Totality
 calcTotality path fc n pats 
-    = do orders <- mapM ctot pats 
-         let order = sortBy cmpOrd $ concat orders
-         let (errs, valid) = partitionEithers order
-         let lex = stripNoLT (stripXX valid)
-         case errs of
-            [] -> do logLvl 3 $ show n ++ ":\n" ++ showSep "\n" (map show lex) 
-                     logLvl 10 $ show pats
-                     checkDecreasing lex
-            (e : _) -> return e -- FIXME: should probably combine them
+    = do i <- get
+         let opts = case lookupCtxt Nothing n (idris_flags i) of
+                            [fs] -> fs
+                            _ -> []
+         if (Coinductive `elem` opts) then calcProd i fc n pats
+           else do orders <- mapM ctot pats 
+                   let order = sortBy cmpOrd $ concat orders
+                   let (errs, valid) = partitionEithers order
+                   let lex = stripNoLT (stripXX valid)
+                   case errs of
+                      [] -> do logLvl 3 $ show n ++ ":\n" ++ showSep "\n" (map show lex) 
+                               logLvl 10 $ show pats
+                               checkDecreasing lex
+                      (e : _) -> return e -- FIXME: should probably combine them
   where
     cmpOrd (Left _) (Left _) = EQ
     cmpOrd (Left _) (Right _) = LT
@@ -252,6 +411,7 @@ checkTotality path fc n
         if TotalFn `elem` opts
             then case t' of
                     Total _ -> return t'
+                    Productive -> return t'
                     e -> totalityError t'
             else return t'
   where
@@ -261,4 +421,67 @@ checkDeclTotality :: (FC, Name) -> Idris Totality
 checkDeclTotality (fc, n) 
     = do logLvl 2 $ "Checking " ++ show n ++ " for totality"
          checkTotality [] fc n
+
+-- Calculate the size change graph for this definition
+
+-- SCG for a function f consists of a list of:
+--    (g, [(a1, sizechange1), (a2, sizechange2), ..., (an, sizechangen)])
+
+-- where g is a function called
+-- a1 ... an are the arguments of f in positions 1..n of g
+-- sizechange1 ... sizechange2 is how their size has changed wrt the input to f
+--    Nothing, if the argument is unrelated to the input
+
+buildSCG :: IState -> SC -> [Name] -> [(Name, [Maybe (Name, SizeChange)])] 
+buildSCG ist sc args = scg sc (zip args args) (zip args (zip args (repeat Same)))
+   where
+      scg :: SC -> [(Name, Name)] -> -- local var, originating top level var
+             [(Name, (Name, SizeChange))] -> -- map from orig to new and relationship
+             [(Name, [Maybe (Name, SizeChange)])]
+      scg (Case x alts) vars szs = concatMap (scgAlt x vars szs) alts
+      scg (STerm tm) vars szs = scgTerm tm vars szs
+      scg _ _ _ = []
+
+      -- how the arguments relate - either Smaller or Unknown
+      argRels :: Name -> [(Name, SizeChange)]
+      argRels n = let ctxt = tt_ctxt ist
+                      [ty] = lookupTy Nothing n ctxt -- must exist!
+                      P _ nty _ = fst (unApply (getRetTy ty))
+                      args = map snd (getArgTys ty) in
+                      map (getRel nty) (map (fst . unApply) args)
+        where
+          getRel ty (P _ n' _) | n' == ty = (n, Smaller)
+          getRel ty _ = (n, Unknown)
+
+      scgAlt x vars szs (ConCase n _ args sc)
+           -- all args smaller than top variable of x in sc
+           -- (as long as they are in the same type family)
+         | Just tvar <- lookup x vars
+              = let arel = argRels n
+                    szs' = zipWith (\arg (_,t) -> (arg, (x, t))) args arel ++ szs
+                    vars' = zip args (repeat tvar) ++ vars in
+                    scg sc vars' szs'
+         | otherwise = scg sc vars szs
+      scgAlt x vars szs (ConstCase _ sc) = scg sc vars szs
+      scgAlt x vars szs (DefaultCase sc) = scg sc vars szs
+
+      scgTerm f@(App _ _) vars szs
+         | (P _ fn _, args) <- unApply f
+            = let rest = concatMap (\x -> scgTerm x vars szs) args in
+                  case lookup fn vars of
+                       Just _ -> rest
+                       Nothing -> (fn, map (mkChange szs) args) : rest 
+      scgTerm (App f a) vars szs
+            = scgTerm f vars szs ++ scgTerm a vars szs
+      scgTerm (Bind n (Let t v) e) vars szs
+            = scgTerm v vars szs ++ scgTerm e vars szs
+      scgTerm (Bind n _ e) vars szs
+            = scgTerm e ((n, n) : vars) szs
+      scgTerm _ _ _ = []
+
+      mkChange :: [(Name, (Name, SizeChange))] -> Term -> Maybe (Name, SizeChange)
+      mkChange szs (P _ n ty) = case lookup n szs of
+                                     Just (_, Unknown) -> Nothing
+                                     t -> t
+      mkChange _ _ = Nothing
 

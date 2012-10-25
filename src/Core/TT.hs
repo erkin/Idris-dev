@@ -48,6 +48,8 @@ data Err = Msg String
               -- Int is 'score' - how much we did unify
               -- Bool indicates recoverability, True indicates more info may make
               -- unification succeed
+         | InfiniteUnify Name Term [(Name, Type)]
+         | CantConvert Term Term [(Name, Type)]
          | NoSuchVariable Name
          | NoTypeDecl Name
          | NotInjective Term Term Term
@@ -64,6 +66,8 @@ instance Sized Err where
   size (Msg msg) = length msg
   size (InternalMsg msg) = length msg
   size (CantUnify _ left right err _ score) = size left + size right + size err
+  size (InfiniteUnify _ right _) = size right
+  size (CantConvert left right _) = size left + size right
   size (NoSuchVariable name) = size name
   size (NoTypeDecl name) = size name
   size (NotInjective l c r) = size l + size c + size r
@@ -414,6 +418,7 @@ data TT n = P NameType n (TT n) -- embed type
           | Constant Const
           | Proj (TT n) Int -- argument projection; runtime only
           | Erased
+          | Impossible -- special case for totality checking
           | Set UExp
   deriving (Ord, Functor)
 {-! 
@@ -712,6 +717,7 @@ showEnv' env t dbg = se 10 env t where
     se p env (Proj x i) = se 1 env x ++ "!" ++ show i
     se p env (Constant c) = show c
     se p env Erased = "[__]"
+    se p env Impossible = "[impossible]"
     se p env (Set i) = "Set " ++ show i
 
     sb env n (Lam t)  = showb env "\\ " " => " n t

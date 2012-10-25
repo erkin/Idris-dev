@@ -79,12 +79,23 @@ data IState = IState {
     brace_stack :: [Maybe Int],
     hide_list :: [(Name, Maybe Accessibility)],
     default_access :: Accessibility,
+    default_total :: Bool,
     ibc_write :: [IBCWrite],
     compiled_so :: Maybe String
    }
 
-data CGInfo = CGInfo { calls :: [(Name, [[Name]])],
-                       argsused :: [Name] }
+data SizeChange = Smaller | Same | Bigger | Unknown
+    deriving Show
+{-! 
+deriving instance Binary SizeChange
+!-}
+
+data CGInfo = CGInfo { argsdef :: [Name],
+                       calls :: [(Name, [[Name]])],
+                       scg :: [(Name, [Maybe (Name, SizeChange)])],
+                       argsused :: [Name],
+                       unusedpos :: [Int] }
+    deriving Show
 {-! 
 deriving instance Binary CGInfo 
 !-}
@@ -117,7 +128,7 @@ idrisInit = IState initContext [] [] emptyContext emptyContext emptyContext
                    emptyContext emptyContext emptyContext emptyContext 
                    emptyContext emptyContext emptyContext
                    [] "" defaultOpts 6 [] [] [] [] [] [] [] []
-                   [] Nothing Nothing [] [] [] Hidden [] Nothing
+                   [] Nothing Nothing [] [] [] Hidden False [] Nothing
 
 -- The monad for the main REPL - reading and processing files and updating 
 -- global state (hence the IO inner monad).
@@ -141,7 +152,7 @@ data Command = Quit
              | NewCompile String
              | Metavars
              | Prove Name
-             | AddProof Name
+             | AddProof (Maybe Name)
              | RmProof Name
              | ShowProof Name
              | Proofs
@@ -152,6 +163,8 @@ data Command = Quit
              | HNF PTerm
              | Defn Name
              | Info Name
+             | Missing Name
+             | Pattelab PTerm
              | DebugInfo Name
              | Search PTerm
              | SetOpt Opt
@@ -171,6 +184,8 @@ data Opt = Filename String
          | NewOutput String
          | TypeCase
          | TypeInType
+         | DefaultTotal
+         | DefaultPartial
          | NoCoverage 
          | ErrContext 
          | ShowImpl
@@ -183,6 +198,8 @@ data Opt = Filename String
          | WarnOnly
          | Pkg String
          | BCAsm String
+         | DumpDefun String
+         | DumpCases String
          | FOVM String
          | UseTarget Target
          | OutputTy OutputType
@@ -242,7 +259,7 @@ expl = Exp False Dynamic
 constraint = Constraint False Dynamic
 tacimpl = TacImp False Dynamic
 
-data FnOpt = Inlinable | TotalFn | AssertTotal | TCGen
+data FnOpt = Inlinable | TotalFn | Coinductive | AssertTotal | TCGen
            | CExport String    -- export, with a C name
            | Specialise [Name] -- specialise it, freeze these names
     deriving (Show, Eq)
@@ -259,7 +276,8 @@ data PDecl' t = PFix     FC Fixity [String] -- fixity declaration
               | PTy      SyntaxInfo FC FnOpts Name t   -- type declaration
               | PClauses FC FnOpts Name [PClause' t]   -- pattern clause
               | PCAF     FC Name t -- top level constant
-              | PData    SyntaxInfo FC (PData' t)      -- data declaration
+              | PData    SyntaxInfo FC Bool -- codata
+                                       (PData' t)  -- data declaration
               | PParams  FC [(Name, t)] [PDecl' t] -- params block
               | PNamespace String [PDecl' t] -- new namespace
               | PRecord  SyntaxInfo FC Name t Name t     -- record declaration
@@ -312,7 +330,7 @@ declared :: PDecl -> [Name]
 declared (PFix _ _ _) = []
 declared (PTy _ _ _ n t) = [n]
 declared (PClauses _ _ n _) = [] -- not a declaration
-declared (PData _ _ (PDatadecl n _ ts)) = n : map fstt ts
+declared (PData _ _ _ (PDatadecl n _ ts)) = n : map fstt ts
    where fstt (a, _, _) = a
 declared (PParams _ _ ds) = concatMap declared ds
 declared (PNamespace _ ds) = concatMap declared ds
@@ -322,7 +340,7 @@ defined :: PDecl -> [Name]
 defined (PFix _ _ _) = []
 defined (PTy _ _ _ n t) = []
 defined (PClauses _ _ n _) = [n] -- not a declaration
-defined (PData _ _ (PDatadecl n _ ts)) = n : map fstt ts
+defined (PData _ _ _ (PDatadecl n _ ts)) = n : map fstt ts
    where fstt (a, _, _) = a
 defined (PParams _ _ ds) = concatMap defined ds
 defined (PNamespace _ ds) = concatMap defined ds
@@ -362,7 +380,7 @@ data PTerm = PQuote Raw
            | PCase FC PTerm [(PTerm, PTerm)]
            | PTrue FC
            | PFalse FC
-           | PRefl FC
+           | PRefl FC PTerm
            | PResolveTC FC
            | PEq FC PTerm PTerm
            | PPair FC PTerm PTerm
@@ -513,7 +531,7 @@ deriving instance Binary OptInfo
 !-}
 
 
-data TypeInfo = TI { con_names :: [Name] }
+data TypeInfo = TI { con_names :: [Name], codata :: Bool }
     deriving Show
 {-!
 deriving instance Binary TypeInfo
@@ -613,7 +631,10 @@ instance Show PData where
 showDeclImp _ (PFix _ f ops) = show f ++ " " ++ showSep ", " ops
 showDeclImp t (PTy _ _ _ n ty) = show n ++ " : " ++ showImp t ty
 showDeclImp _ (PClauses _ _ n c) = showSep "\n" (map show c)
-showDeclImp _ (PData _ _ d) = show d
+showDeclImp _ (PData _ _ _ d) = show d
+showDeclImp _ (PParams f ns ps) = "parameters " ++ show ns ++ "\n" ++ 
+                                    showSep "\n" (map show ps)
+
 
 showCImp :: Bool -> PClause -> String
 showCImp impl (PClause _ n l ws r w) 
@@ -776,7 +797,7 @@ prettyImp impl = prettySe 10
 
         sc (l, r) = prettySe 10 l <+> text "=>" <+> prettySe 10 r
     prettySe p (PHidden tm) = text "." <> prettySe 0 tm
-    prettySe p (PRefl _) = text "refl"
+    prettySe p (PRefl _ _) = text "refl"
     prettySe p (PResolveTC _) = text "resolvetc"
     prettySe p (PTrue _) = text "()"
     prettySe p (PFalse _) = text "_|_"
@@ -885,7 +906,9 @@ showImp impl tm = se 10 tm where
     se p (PCase _ scr opts) = "case " ++ se 10 scr ++ " of " ++ showSep " | " (map sc opts)
        where sc (l, r) = se 10 l ++ " => " ++ se 10 r
     se p (PHidden tm) = "." ++ se 0 tm
-    se p (PRefl _) = "refl"
+    se p (PRefl _ t) 
+        | not impl = "refl"
+        | otherwise = "refl {" ++ se 10 t ++ "}"
     se p (PResolveTC _) = "resolvetc"
     se p (PTrue _) = "()"
     se p (PFalse _) = "_|_"
@@ -919,36 +942,6 @@ showImp impl tm = se 10 tm where
     bracket outer inner str | inner > outer = "(" ++ str ++ ")"
                             | otherwise = str
 
-{-
- PQuote Raw
-           | PRef FC Name
-           | PLam Name PTerm PTerm
-           | PPi  Plicity Name PTerm PTerm
-           | PLet Name PTerm PTerm PTerm 
-           | PTyped PTerm PTerm -- term with explicit type
-           | PApp FC PTerm [PArg]
-           | PCase FC PTerm [(PTerm, PTerm)]
-           | PTrue FC
-           | PFalse FC
-           | PRefl FC
-           | PResolveTC FC
-           | PEq FC PTerm PTerm
-           | PPair FC PTerm PTerm
-           | PDPair FC PTerm PTerm PTerm
-           | PAlternative [PTerm]
-           | PHidden PTerm -- irrelevant or hidden pattern
-           | PSet
-           | PConstant Const
-           | Placeholder
-           | PDoBlock [PDo]
-           | PIdiom FC PTerm
-           | PReturn FC
-           | PMetavar Name
-           | PProof [PTactic]
-           | PTactics [PTactic] -- as PProof, but no auto solving
-           | PElabError Err -- error to report on elaboration
-           | PImpossible -- special case for declaring when an LHS can't typecheck
--}
 
 instance Sized PTerm where
   size (PQuote rawTerm) = size rawTerm
@@ -961,7 +954,7 @@ instance Sized PTerm where
   size (PCase fc trm bdy) = 1 + size trm + size bdy
   size (PTrue fc) = 1
   size (PFalse fc) = 1
-  size (PRefl fc) = 1
+  size (PRefl fc _) = 1
   size (PResolveTC fc) = 1
   size (PEq fc left right) = 1 + size left + size right
   size (PPair fc left right) = 1 + size left + size right

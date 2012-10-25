@@ -6,9 +6,11 @@ data Binary : Nat -> Set where
     bI : Binary n -> Binary (S (n + n))
 
 instance Show (Binary n) where
-    show (bO x) = show x ++ "0"
-    show (bI x) = show x ++ "1"
-    show bEnd = ""
+    show = show' where
+      show' : Binary n' -> String
+      show' (bO x) = show x ++ "0"
+      show' (bI x) = show x ++ "1"
+      show' bEnd = ""
 
 data Parity : Nat -> Set where
    even : Parity (n + n)
@@ -38,6 +40,12 @@ main = do putStr "Enter a number: "
 
 ---------- Proofs ----------
 
+main.parity_lemma_1 = proof {
+    intros;
+    rewrite sym (plusSuccRightSucc j j);
+    trivial;
+}
+
 natToBin_lemma_1 = proof {
     intro;
     intro;
@@ -52,11 +60,5 @@ parity_lemma_2 = proof {
     trivial;
 }
 
-parity_lemma_1 = proof {
-    intro j;
-    intro;
-    rewrite sym (plusSuccRightSucc j j);
-    trivial;
-}
 
 

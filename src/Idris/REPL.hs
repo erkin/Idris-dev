@@ -14,6 +14,8 @@ import Idris.Prover
 import Idris.Parser
 import Idris.Primitives
 import Idris.Coverage
+import Idris.UnusedArgs
+
 import Paths_idris
 import Util.System
 
@@ -161,7 +163,7 @@ process fn (Eval t)
                                  showImp imp (delab ist ty'))
 process fn (ExecVal t) 
                     = do (tm, ty) <- elabVal toplevel False t 
---                                         (PApp fc (PRef fc (NS (UN "print") ["prelude"]))
+--                                         (PApp fc (PRef fc (NS (UN "print") ["Prelude"]))
 --                                                           [pexp t])
                          (tmpn, tmph) <- liftIO tempfile
                          liftIO $ hClose tmph
@@ -220,6 +222,12 @@ process fn (DebugInfo n)
                          let d = lookupDef Nothing n (tt_ctxt i)
                          when (not (null d)) $ liftIO $
                             do print (head d)
+                         let cg = lookupCtxtName Nothing n (idris_callgraph i)
+                         findUnusedArgs (map fst cg)
+                         i <- get
+                         let cg' = lookupCtxtName Nothing n (idris_callgraph i)
+                         when (not (null cg')) $ do iputStrLn "Call graph:\n"
+                                                    iputStrLn (show cg')
 process fn (Info n) = do i <- get
                          case lookupCtxt Nothing n (idris_classes i) of
                               [c] -> classInfo c
@@ -247,13 +255,18 @@ process fn (RmProof n')
                                  let ms = idris_metavars i
                                  put $ i { idris_metavars = n : ms }
 
-process fn (AddProof n')
+process fn (AddProof prf)
   = do let fb = fn ++ "~"
        liftIO $ copyFile fn fb -- make a backup in case something goes wrong!
        prog <- liftIO $ readFile fb
        i <- get
-       n <- resolveProof n'
        let proofs = proof_list i
+       n' <- case prf of
+                Nothing -> case proofs of
+                             [] -> fail "No proof to add"
+                             ((x, p) : _) -> return x
+                Just nm -> return nm
+       n <- resolveProof n'
        case lookup n proofs of
             Nothing -> iputStrLn "No proof to add"
             Just p  -> do let prog' = insertScript (showProof (lit fn) n p) ls
@@ -296,7 +309,7 @@ process fn TTShell  = do ist <- get
 process fn Execute = do (m, _) <- elabVal toplevel False 
                                         (PApp fc 
                                            (PRef fc (UN "run__IO"))
-                                           [pexp $ PRef fc (NS (UN "main") ["main"])])
+                                           [pexp $ PRef fc (NS (UN "main") ["Main"])])
 --                                      (PRef (FC "main" 0) (NS (UN "main") ["main"]))
                         (tmpn, tmph) <- liftIO tempfile
                         liftIO $ hClose tmph
@@ -308,16 +321,28 @@ process fn Execute = do (m, _) <- elabVal toplevel False
 process fn (NewCompile f) 
      = do (m, _) <- elabVal toplevel False
                       (PApp fc (PRef fc (UN "run__IO"))
-                          [pexp $ PRef fc (NS (UN "main") ["main"])])
+                          [pexp $ PRef fc (NS (UN "main") ["Main"])])
           compileEpic f m
   where fc = FC "main" 0                     
 process fn (Compile target f) 
       = do (m, _) <- elabVal toplevel False
                        (PApp fc (PRef fc (UN "run__IO"))
-                       [pexp $ PRef fc (NS (UN "main") ["main"])])
+                       [pexp $ PRef fc (NS (UN "main") ["Main"])])
            compile target f m
   where fc = FC "main" 0                     
 process fn (LogLvl i) = setLogLevel i 
+-- Elaborate as if LHS of a pattern (debug command)
+process fn (Pattelab t) 
+     = do (tm, ty) <- elabVal toplevel True t
+          iputStrLn $ show tm ++ "\n\n : " ++ show ty
+
+process fn (Missing n) = do i <- get
+                            case lookupDef Nothing n (tt_ctxt i) of
+                                [CaseOp _ _ _ args t _ _]
+                                    -> do tms <- genMissing n args t
+                                          iputStrLn (showSep "\n" (map (showImp True) tms))
+                                [] -> iputStrLn $ show n ++ " undefined"
+                                _ -> iputStrLn $ "Ambiguous name"
 process fn Metavars 
                  = do ist <- get
                       let mvs = idris_metavars ist \\ primDefs
@@ -377,6 +402,8 @@ parseArgs ("-o":n:ns)           = NoREPL : Output n : (parseArgs ns)
 parseArgs ("-no":n:ns)          = NoREPL : NewOutput n : (parseArgs ns)
 parseArgs ("--typecase":ns)     = TypeCase : (parseArgs ns)
 parseArgs ("--typeintype":ns)   = TypeInType : (parseArgs ns)
+parseArgs ("--total":ns)        = DefaultTotal : (parseArgs ns)
+parseArgs ("--partial":ns)      = DefaultPartial : (parseArgs ns)
 parseArgs ("--nocoverage":ns)   = NoCoverage : (parseArgs ns)
 parseArgs ("--errorcontext":ns) = ErrContext : (parseArgs ns)
 parseArgs ("--help":ns)         = Usage : (parseArgs ns)
@@ -398,6 +425,8 @@ parseArgs ("--fovm":n:ns)       = NoREPL : FOVM n : (parseArgs ns)
 parseArgs ("--llvm":ns)         = UseTarget ViaLLVM : (parseArgs ns)
 parseArgs ("-S":ns)             = OutputTy Raw : (parseArgs ns)
 parseArgs ("-c":ns)             = OutputTy Object : (parseArgs ns)
+parseArgs ("--dumpdefuns":n:ns) = DumpDefun n : (parseArgs ns)
+parseArgs ("--dumpcases":n:ns)  = DumpCases n : (parseArgs ns)
 parseArgs (n:ns)                = Filename n : (parseArgs ns)
 
 help =
@@ -405,6 +434,7 @@ help =
     ([""], "", ""),
     (["<expr>"], "", "Evaluate an expression"),
     ([":t"], "<expr>", "Check the type of an expression"),
+    ([":miss", ":missing"], "<name>", "Show missing clauses"),
     ([":i", ":info"], "<name>", "Display information about a type class"),
     ([":total"], "<name>", "Check the totality of a name"),
     ([":r",":reload"], "", "Reload current file"),
@@ -444,6 +474,8 @@ idrisMain opts =
        let tgt = case opt getTarget opts of
                    [] -> ViaC
                    xs -> last xs
+       when (DefaultTotal `elem` opts) $ do i <- get
+                                            put (i { default_total = True })
        setREPL runrepl
        setVerbose runrepl
        setCmdLine opts
@@ -466,7 +498,7 @@ idrisMain opts =
        addPkgDir "base"
        mapM_ addPkgDir pkgdirs
        elabPrims
-       when (not (NoPrelude `elem` opts)) $ do x <- loadModule "prelude"
+       when (not (NoPrelude `elem` opts)) $ do x <- loadModule "Prelude"
                                                return ()
        when runrepl $ iputStrLn banner 
        ist <- get

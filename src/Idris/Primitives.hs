@@ -169,7 +169,7 @@ primitives =
    Prim (UN "prim__stdin") (ty [] PtrType) 0 (p_cantreduce)
     (0, LStdIn) partial,
    Prim (UN "prim__believe_me") believeTy 3 (p_believeMe)
-    (1, LNoOp) total -- ahem
+    (3, LNoOp) total -- ahem
   ]
 
 p_believeMe [_,_,x] = Just x
@@ -281,7 +281,7 @@ elabPrim (Prim n ty i def sc tot)
 
 elabPrims :: Idris ()
 elabPrims = do mapM_ (elabDecl toplevel) 
-                     (map (PData defaultSyntax (FC "builtin" 0))
+                     (map (PData defaultSyntax (FC "builtin" 0) False)
                          [inferDecl, unitDecl, falseDecl, pairDecl, eqDecl])
                mapM_ elabPrim primitives
 

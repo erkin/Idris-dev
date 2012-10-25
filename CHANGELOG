@@ -1,3 +1,23 @@
+New in 0.9.5:
+-------------
+
+User visible changes:
+
+* Added codata
+  - as data declarations, but constructor arguments are evaluated lazily
+  - functions which return a codata type do not reduce at compile time
+* Added 'parameters' blocks
+* Allow local data definitions in where blocks
+* Added '%default' directive to declare total-by-default or partial-by-default
+  for functions, and a corresponding "partial" reserved words to mark functions
+  as allowed to be partial. Also "--total" and "--partial" added as command
+  line options.
+
+Internal changes:
+
+* Several improvements and fixes to unification
+* Added collapsing optimisation and more aggressive erasure
+
 New in 0.9.4:
 -------------
 

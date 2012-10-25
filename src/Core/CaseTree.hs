@@ -1,5 +1,7 @@
-module Core.CaseTree(CaseDef(..), SC(..), CaseAlt(..), CaseTree,
-                     simpleCase, small, namesUsed, findCalls) where
+{-# LANGUAGE PatternGuards #-}
+
+module Core.CaseTree(CaseDef(..), SC(..), CaseAlt(..), Phase(..), CaseTree,
+                     simpleCase, small, namesUsed, findCalls, findUsedArgs) where
 
 import Core.TT
 
@@ -15,7 +17,8 @@ data SC = Case Name [CaseAlt] -- invariant: lowest tags first
         | ProjCase Term [CaseAlt] -- special case for projections
         | STerm Term
         | UnmatchedCase String -- error message
-    deriving (Show, Eq, Ord)
+        | ImpossibleCase -- already checked to be impossible
+    deriving (Eq, Ord)
 {-! 
 deriving instance Binary SC 
 !-}
@@ -27,6 +30,28 @@ data CaseAlt = ConCase Name Int [Name] SC
 {-! 
 deriving instance Binary CaseAlt 
 !-}
+
+instance Show SC where
+    show sc = show' 1 sc
+      where
+        show' i (Case n alts) = "case " ++ show n ++ " of\n" ++ indent i ++ 
+                                    showSep ("\n" ++ indent i) (map (showA i) alts)
+        show' i (ProjCase tm alts) = "case " ++ show tm ++ " of " ++
+                                      showSep ("\n" ++ indent i) (map (showA i) alts)
+        show' i (STerm tm) = show tm
+        show' i (UnmatchedCase str) = "error " ++ show str
+        show' i ImpossibleCase = "impossible"
+
+        indent i = concat $ take i (repeat "    ")
+
+        showA i (ConCase n t args sc) 
+           = show n ++ "(" ++ showSep (", ") (map show args) ++ ") => "
+                ++ show' (i+1) sc
+        showA i (ConstCase t sc) 
+           = show t ++ " => " ++ show' (i+1) sc
+        showA i (DefaultCase sc) 
+           = "_ => " ++ show' (i+1) sc
+              
 
 type CaseTree = SC
 type Clause   = ([Pat], (Term, Term))
@@ -68,7 +93,7 @@ namesUsed sc = nub $ nu' [] sc where
 -- arguments
 
 findCalls :: SC -> [Name] -> [(Name, [[Name]])]
-findCalls sc ign = nub $ nu' ign sc where
+findCalls sc topargs = nub $ nu' topargs sc where
     nu' ps (Case n alts) = nub (concatMap (nua (n : ps)) alts)
     nu' ps (STerm t)     = nub $ nut ps t
     nu' ps _ = []
@@ -77,59 +102,84 @@ findCalls sc ign = nub $ nu' ign sc where
     nua ps (ConstCase _ sc) = nu' ps sc
     nua ps (DefaultCase sc) = nu' ps sc
 
-    nut ps (P _ n _) | n `elem` ps = []
+    nut ps (P Ref n _) | n `elem` ps = []
                      | otherwise = [(n, [])] -- tmp
-    nut ps (App f a) = nut ps f ++ nut ps a
+    nut ps fn@(App f a) 
+        | (P Ref n _, args) <- unApply fn
+             = if n `elem` ps then nut ps f ++ nut ps a
+                  else [(n, map argNames args)] ++ concatMap (nut ps) args
+        | otherwise = nut ps f ++ nut ps a
     nut ps (Bind n (Let t v) sc) = nut ps v ++ nut (n:ps) sc
     nut ps (Bind n b sc) = nut (n:ps) sc
     nut ps _ = []
 
--- Find directly used arguments (i.e. used but not in function calls)
-{-
-findUsedArgs :: SC -> [Name] -> [(Name, [[Name]])]
-findUsedArgs sc ign = nub $ nu' ign sc where
-    nu' ps (Case n alts) = nub (concatMap (nua (n : ps)) alts)
-    nu' ps (STerm t)     = nub $ nut ps t
-    nu' ps _ = []
+    argNames tm = let ns = directUse tm in
+                      filter (\x -> x `elem` ns) topargs
 
-    nua ps (ConCase n i args sc) = nub (nu' (ps ++ args) sc) 
-    nua ps (ConstCase _ sc) = nu' ps sc
-    nua ps (DefaultCase sc) = nu' ps sc
+-- Find names which are used directly (i.e. not in a function call) in a term
 
-    nut ps (P _ n _) | n `elem` ps = []
-                     | otherwise = [(n, [])] -- tmp
-    nut ps (App f a) = nut ps f ++ nut ps a
-    nut ps (Bind n (Let t v) sc) = nut ps v ++ nut (n:ps) sc
-    nut ps (Bind n b sc) = nut (n:ps) sc
-    nut ps _ = []
--}
+directUse :: Eq n => TT n -> [n]
+directUse (P _ n _) = [n]
+directUse (Bind n (Let t v) sc) = nub $ directUse v ++ (directUse sc \\ [n])
+                                        ++ directUse t
+directUse (Bind n b sc) = nub $ directUse (binderTy b) ++ (directUse sc \\ [n])
+directUse fn@(App f a) 
+    | (P Ref n _, args) <- unApply fn = [] -- need to know what n does with them
+    | otherwise = nub $ directUse f ++ directUse a
+directUse (Proj x i) = nub $ directUse x
+directUse _ = []
 
-simpleCase :: Bool -> Bool -> Bool -> FC -> [([Name], Term, Term)] -> TC CaseDef
-simpleCase tc cover proj fc [] 
+-- Find all directly used arguments (i.e. used but not in function calls)
+
+findUsedArgs :: SC -> [Name] -> [Name]
+findUsedArgs sc topargs = filter (\x -> x `elem` topargs) (nub $ nu' sc) where
+    nu' (Case n alts) = n : concatMap nua alts
+    nu' (STerm t)     = directUse t
+    nu' _             = []
+
+    nua (ConCase n i args sc) = nu' sc 
+    nua (ConstCase _ sc)      = nu' sc
+    nua (DefaultCase sc)      = nu' sc
+
+data Phase = CompileTime | RunTime
+    deriving (Show, Eq)
+
+-- Generate a simple case tree
+-- Work Left to Right at Compile Time 
+
+simpleCase :: Bool -> Bool -> Phase -> FC -> [([Name], Term, Term)] -> TC CaseDef
+simpleCase tc cover phase fc [] 
                  = return $ CaseDef [] (UnmatchedCase "No pattern clauses") []
-simpleCase tc cover proj fc cs 
-      = let pats       = map (\ (avs, l, r) -> 
-                                   (avs, reverse (toPats tc l), (l, r))) cs
+simpleCase tc cover phase fc cs 
+      = let proj       = phase == RunTime
+            pats       = map (\ (avs, l, r) -> 
+                                   (avs, rev phase (toPats tc l), (l, r))) cs
             chkPats    = mapM chkAccessible pats in
             case chkPats of
                 OK pats ->
                     let numargs    = length (fst (head pats)) 
                         ns         = take numargs args
                         (tree, st) = runState 
-                                         (match (reverse ns) pats (defaultCase cover)) ([], numargs) in
-                        return $ CaseDef ns (prune proj tree) (fst st)
+                                         (match (rev phase ns) pats (defaultCase cover)) ([], numargs)
+                        t          = CaseDef ns (prune proj (depatt ns tree)) (fst st) in
+                        if proj then return (stripLambdas t) else return t
                 Error err -> Error (At fc err)
     where args = map (\i -> MN i "e") [0..]
           defaultCase True = STerm Erased
           defaultCase False = UnmatchedCase "Error"
 
-          chkAccessible (avs, l, c) = do mapM_ (acc l) avs
-                                         return (l, c)
+          chkAccessible (avs, l, c) 
+               | phase == RunTime = return (l, c)
+               | otherwise = do mapM_ (acc l) avs
+                                return (l, c)
 
           acc [] n = Error (Inaccessible n) 
           acc (PV x : xs) n | x == n = OK ()
           acc (PCon _ _ ps : xs) n = acc (ps ++ xs) n
           acc (_ : xs) n = acc xs n
+
+rev CompileTime = id
+rev _ = reverse
 
 data Pat = PCon Name Int [Pat]
          | PConst Const
@@ -197,7 +247,9 @@ match :: [Name] -> [Clause] -> SC -- error case
 match [] (([], ret) : xs) err 
     = do (ts, v) <- get
          put (ts ++ (map (fst.snd) xs), v)
-         return $ STerm (snd ret) -- run out of arguments
+         case snd ret of
+            Impossible -> return ImpossibleCase
+            tm -> return $ STerm tm -- run out of arguments
 match vs cs err = do let ps = partition cs
                      cs <- mixture vs ps err
                      return cs
@@ -289,16 +341,42 @@ varRule (v : vs) alts err =
     do let alts' = map (repVar v) alts
        match vs alts' err
   where
-    repVar v (PV p : ps , (lhs, res)) = (ps, (lhs, subst p (P Bound v (V 0)) res))
+    repVar v (PV p : ps , (lhs, res)) = (ps, (lhs, subst p (P Bound v Erased) res))
     repVar v (PAny : ps , res) = (ps, res)
 
-prune :: Bool -> -- ^ Convert single brances to projections (only useful at runtime)
+-- fix: case e of S k -> f (S k)  ==> case e of S k -. f e
+depatt :: [Name] -> SC -> SC
+depatt ns tm = dp [] tm
+  where
+    dp ms (STerm tm) = STerm (applyMaps ms tm)
+    dp ms (Case x alts) = Case x (map (dpa ms x) alts)
+    dp ms sc = sc
+
+    dpa ms x (ConCase n i args sc)
+        = ConCase n i args (dp ((x, (n, args)) : ms) sc)
+    dpa ms x (ConstCase c sc) = ConstCase c (dp ms sc)
+    dpa ms x (DefaultCase sc) = DefaultCase (dp ms sc)
+
+    applyMaps ms f@(App _ _)
+       | (P nt cn pty, args) <- unApply f
+            = let args' = map (applyMaps ms) args in
+                  applyMap ms nt cn pty args'
+        where
+          applyMap [] nt cn pty args' = mkApp (P nt cn pty) args'
+          applyMap ((x, (n, args)) : ms) nt cn pty args'
+            | and ((n == cn) : zipWith same args args') = P Ref x Erased
+            | otherwise = applyMap ms nt cn pty args'
+          same n (P _ n' _) = n == n'
+          same _ _ = False
+    applyMaps ms (App f a) = App (applyMaps ms f) (applyMaps ms a)
+    applyMaps ms t = t
+
+prune :: Bool -> -- ^ Convert single branches to projections (only useful at runtime)
          SC -> SC
 prune proj (Case n alts) 
-    = let alts' = map pruneAlt $ 
-                      filter notErased alts in
+    = let alts' = filter notErased (map pruneAlt alts) in
           case alts' of
-            [] -> STerm Erased
+            [] -> ImpossibleCase
             as@[ConCase cn i args sc] -> if proj then mkProj n 0 args sc
                                                  else Case n as
             as  -> Case n as
@@ -307,6 +385,7 @@ prune proj (Case n alts)
           pruneAlt (DefaultCase sc) = DefaultCase (prune proj sc)
 
           notErased (DefaultCase (STerm Erased)) = False
+          notErased (DefaultCase ImpossibleCase) = False
           notErased _ = True
 
           mkProj n i []       sc = sc
@@ -332,5 +411,12 @@ prune proj (Case n alts)
           projRepTm arg n i t = subst arg (Proj (P Bound n Erased) i) t 
 
 prune _ t = t
+
+stripLambdas :: CaseDef -> CaseDef
+stripLambdas (CaseDef ns (STerm (Bind x (Lam _) sc)) tm)
+    = stripLambdas (CaseDef (ns ++ [x]) (STerm (instantiate (P Bound x Erased) sc)) tm)
+stripLambdas x = x
+
+
 
 

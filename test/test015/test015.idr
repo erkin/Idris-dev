@@ -1,15 +1,17 @@
-module main
+module Main
 
-import parity
-import system
+import Parity
+import System
 
 data Bit : Nat -> Set where
-     b0 : Bit 0
-     b1 : Bit 1
+     b0 : Bit O
+     b1 : Bit (S O) 
 
 instance Show (Bit n) where
-     show b0 = "0"
-     show b1 = "1"
+     show = show' where
+        show' : Bit x -> String
+        show' b0 = "0"
+        show' b1 = "1"
 
 infixl 5 #
 
@@ -18,8 +20,10 @@ data Binary : (width : Nat) -> (value : Nat) -> Set where
      (#)  : Binary w v -> Bit bit -> Binary (S w) (bit + 2 * v)
 
 instance Show (Binary w k) where
-     show zero = ""
-     show (bin # bit) = show bin ++ show bit
+     show = show' where
+        show' : Binary w' k' -> String
+        show' zero = ""
+        show' (bin # bit) = show bin ++ show bit
 
 pad : Binary w n -> Binary (S w) n
 pad zero = zero # b0 
@@ -83,7 +87,7 @@ main = do let Just bin1 = natToBin 8 42
     
 ---------- Proofs ----------
 
-main.ntbOdd = proof {
+Main.ntbOdd = proof {
     intro w,j;
     rewrite sym (plusZeroRightNeutral j);
     rewrite plusSuccRightSucc j j;
@@ -92,7 +96,7 @@ main.ntbOdd = proof {
     trivial;
 }
 
-main.ntbEven = proof {
+Main.ntbEven = proof {
     compute;
     intro w,j;
     rewrite sym (plusZeroRightNeutral j);
@@ -103,7 +107,7 @@ main.ntbEven = proof {
 
 -- There is almost certainly an easier proof. I don't care, for now :)
 
-main.adc_lemma_2 = proof {
+Main.adc_lemma_2 = proof {
     intro c,w,v,bit0,num0;
     intro b0,v1,bit1,num1,b1;
     intro bc,x,x1,bx,bx1;
@@ -133,7 +137,7 @@ main.adc_lemma_2 = proof {
     trivial;
 }
 
-main.adc_lemma_1 = proof {
+Main.adc_lemma_1 = proof {
     intros;
     rewrite sym (plusZeroRightNeutral c) ;
     trivial;

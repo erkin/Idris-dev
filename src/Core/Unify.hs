@@ -28,15 +28,15 @@ unify ctxt env topx topy
     = -- case runStateT (un' False [] topx topy) (UI 0 [] []) of
       --    OK (v, UI _ inj []) -> return (filter notTrivial v, inj, [])
       --    _ -> 
-      -- trace ("Unifying " ++ show (topx, topy)) $
+--       trace ("Unifying " ++ show (topx, topy)) $
                let topxn = normalise ctxt env topx
-	           topyn = normalise ctxt env topy in
+                   topyn = normalise ctxt env topy in
 --                     trace ("Unifying " ++ show (topxn, topyn)) $
-		     case runStateT (un' False [] topxn topyn)
-		  	        (UI 0 [] []) of
-	               OK (v, UI _ inj fails) -> return (filter notTrivial v, inj, reverse fails)
+                     case runStateT (un' False [] topxn topyn)
+        	  	        (UI 0 [] []) of
+                       OK (v, UI _ inj fails) -> return (filter notTrivial v, inj, reverse fails)
 --                     OK (_, UI s _ ((_,_,f):fs)) -> tfail $ CantUnify topx topy f s
-		       Error e -> tfail e
+        	       Error e -> tfail e
   where
     notTrivial (x, P _ x' _) = x /= x'
     notTrivial _ = True
@@ -77,12 +77,12 @@ unify ctxt env topx topy
         | holeIn env x = do UI s i f <- get
                             when (notP tm && fn) $ put (UI s ((tm, topx, topy) : i) f)
                             sc 1
-                            return [(x, tm)]
+                            checkCycle (x, tm)
     un' fn bnames tm (P Bound y _)
         | holeIn env y = do UI s i f <- get
                             when (notP tm && fn) $ put (UI s ((tm, topx, topy) : i) f)
                             sc 1
-                            return [(y, tm)]
+                            checkCycle (y, tm)
     un' fn bnames (V i) (P Bound x _)
         | fst (bnames!!i) == x || snd (bnames!!i) == x = do sc 1; return []
     un' fn bnames (P Bound x _) (V i)
@@ -121,6 +121,10 @@ unify ctxt env topx topy
         | n == n' = un' False bnames x y
     un' fn bnames (Bind n (Lam t) (App x (P Bound n' _))) y
         | n == n' = un' False bnames x y
+--     un' fn bnames (Bind x (PVar _) sx) (Bind y (PVar _) sy) 
+--         = un' False ((x,y):bnames) sx sy
+--     un' fn bnames (Bind x (PVTy _) sx) (Bind y (PVTy _) sy) 
+--         = un' False ((x,y):bnames) sx sy
     un' fn bnames (Bind x bx sx) (Bind y by sy) 
         = do h1 <- uB bnames bx by
              h2 <- un' False ((x,y):bnames) sx sy
@@ -165,13 +169,20 @@ unify ctxt env topx topy
                        put (UI s i ((binderTy x, binderTy y, env, err) : f))
                        return [] -- lift $ tfail err
 
+    checkCycle p@(x, P _ _ _) = return [p] 
+    checkCycle (x, tm) 
+        | not (x `elem` freeNames tm) = return [(x, tm)]
+        | otherwise = lift $ tfail (InfiniteUnify x tm (errEnv env)) 
+
     combine bnames as [] = return as
     combine bnames as ((n, t) : bs)
         = case lookup n as of 
             Nothing -> combine bnames (as ++ [(n,t)]) bs
-            Just t' -> do un' False bnames t t'
+            Just t' -> do ns <- un' False bnames t t'
+                          -- make sure there's n mapping from n in ns
+                          let ns' = filter (\ (x, _) -> x/=n) ns
                           sc 1
-                          combine bnames as bs
+                          combine bnames as (ns' ++ bs)
 
     -- If there are any clashes of constructors, deem it unrecoverable, otherwise some
     -- more work may help.

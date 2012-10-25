@@ -68,16 +68,16 @@ getTotality n
                 [t] -> return t
                 _ -> return (Total [])
 
-addToCG :: Name -> [(Name, [[Name]])] -> Idris ()
-addToCG n ns = do i <- get
-                  put (i { idris_callgraph = addDef n (CGInfo ns [])
-                                                      (idris_callgraph i) })
+addToCG :: Name -> CGInfo -> Idris ()
+addToCG n cg = do i <- get
+                  put (i { idris_callgraph = addDef n cg (idris_callgraph i) })
 
 addToCalledG :: Name -> [Name] -> Idris ()
 addToCalledG n ns = return () -- TODO
 
 -- Add a class instance function. Dodgy hack: Put integer instances first in the
 -- list so they are resolved by default.
+-- Dodgy hack 2: put constraint chasers (@@) last
 
 addInstance :: Bool -> Name -> Name -> Idris ()
 addInstance int n i 
@@ -89,7 +89,15 @@ addInstance int n i
                 _ -> do let cs = addDef n (CI (MN 0 "none") [] [] [] [i]) (idris_classes ist)
                         put (ist { idris_classes = cs })
   where addI i ins | int = i : ins
-                   | otherwise = ins ++ [i]
+                   | chaser n = ins ++ [i]
+                   | otherwise = insI i ins
+        insI i [] = [i]
+        insI i (n : ns) | chaser n = i : n : ns
+                        | otherwise = n : insI i ns
+
+        chaser (UN ('@':'@':_)) = True
+        chaser (NS n _) = chaser n
+        chaser _ = False
 
 addClass :: Name -> ClassInfo -> Idris ()
 addClass n i 
@@ -200,6 +208,20 @@ setCmdLine :: [Opt] -> Idris ()
 setCmdLine opts = do i <- get
                      let iopts = idris_options i
                      put (i { idris_options = iopts { opt_cmdline = opts } })
+
+getDumpDefun :: Idris (Maybe FilePath)
+getDumpDefun = do i <- get
+                  return $ findC (opt_cmdline (idris_options i))
+    where findC [] = Nothing
+          findC (DumpDefun x : _) = Just x
+          findC (_ : xs) = findC xs
+
+getDumpCases :: Idris (Maybe FilePath)
+getDumpCases = do i <- get
+                  return $ findC (opt_cmdline (idris_options i))
+    where findC [] = Nothing
+          findC (DumpCases x : _) = Just x
+          findC (_ : xs) = findC xs
 
 logLevel :: Idris Int
 logLevel = do i <- get
@@ -399,8 +421,11 @@ sigmaTy   = UN "Exists"
 existsCon = UN "Ex_intro"
 
 piBind :: [(Name, PTerm)] -> PTerm -> PTerm
-piBind [] t = t
-piBind ((n, ty):ns) t = PPi expl n ty (piBind ns t)
+piBind = piBindp expl
+
+piBindp :: Plicity -> [(Name, PTerm)] -> PTerm -> PTerm
+piBindp p [] t = t
+piBindp p ((n, ty):ns) t = PPi p n ty (piBind ns t)
     
 tcname (UN ('@':_)) = True
 tcname (NS n _) = tcname n
@@ -447,16 +472,22 @@ expandParams dec ps ns tm = en tm
     en (PTactics ts) = PTactics (map (fmap en) ts)
 
     en (PQuote (Var n)) 
-        | n `elem` ns = PQuote (Var (dec n))
+        | n `nselem` ns = PQuote (Var (dec n))
     en (PApp fc (PRef fc' n) as)
-        | n `elem` ns = PApp fc (PRef fc' (dec n)) 
+        | n `nselem` ns = PApp fc (PRef fc' (dec n)) 
                            (map (pexp . (PRef fc)) (map fst ps) ++ (map (fmap en) as))
     en (PRef fc n)
-        | n `elem` ns = PApp fc (PRef fc (dec n)) 
+        | n `nselem` ns = PApp fc (PRef fc (dec n)) 
                            (map (pexp . (PRef fc)) (map fst ps))
     en (PApp fc f as) = PApp fc (en f) (map (fmap en) as)
     en (PCase fc c os) = PCase fc (en c) (map (pmap en) os)
     en t = t
+
+    nselem x [] = False
+    nselem x (y : xs) | nseq x y = True
+                      | otherwise = nselem x xs
+
+    nseq x y = nsroot x == nsroot y
 
 expandParamsD :: IState -> 
                  (Name -> Name) -> [(Name, PTerm)] -> [Name] -> PDecl -> PDecl
@@ -488,8 +519,35 @@ expandParamsD ist dec ps ns (PClauses fc opts n cs)
     updateps yn nm (((a, t), i):as)
         | (a `elem` nm) == yn = (a, t) : updateps yn nm as
         | otherwise = (MN i (show n ++ "_u"), t) : updateps yn nm as
-
+expandParamsD ist dec ps ns (PData syn fc co pd) = PData syn fc co (expandPData pd)
+  where
+    -- just do the type decl, leave constructors alone (parameters will be
+    -- added implicitly)
+    expandPData (PDatadecl n ty cons) 
+       = if n `elem` ns
+            then PDatadecl (dec n) (piBind ps (expandParams dec ps ns ty)) (map econ cons)
+            else PDatadecl n (expandParams dec ps ns ty) (map econ cons)
+    econ (n, t, fc) = (dec n, piBindp expl ps (expandParams dec ps ns t), fc)
+expandParamsD ist dec ps ns (PParams f params pds)
+   = PParams f (map (mapsnd (expandParams dec ps ns)) params) 
+               (map (expandParamsD ist dec ps ns) pds) 
+expandParamsD ist dec ps ns (PClass info f cs n params decls)
+   = PClass info f 
+           (map (expandParams dec ps ns) cs)
+           n
+           (map (mapsnd (expandParams dec ps ns)) params)
+           (map (expandParamsD ist dec ps ns) decls)
+expandParamsD ist dec ps ns (PInstance info f cs n params ty cn decls)
+   = PInstance info f 
+           (map (expandParams dec ps ns) cs)
+           n
+           (map (expandParams dec ps ns) params)
+           (expandParams dec ps ns ty)
+           cn
+           (map (expandParamsD ist dec ps ns) decls)
 expandParamsD ist dec ps ns d = d
+
+mapsnd f (x, t) = (x, f t)
 
 -- Calculate a priority for a type, for deciding elaboration order
 -- * if it's just a type variable or concrete type, do it early (0)
@@ -509,7 +567,7 @@ getPriority i tm = pri tm
     pri (PPi _ _ x y) = max 5 (max (pri x) (pri y))
     pri (PTrue _) = 0
     pri (PFalse _) = 0
-    pri (PRefl _) = 1
+    pri (PRefl _ _) = 1
     pri (PEq _ l r) = max 1 (max (pri l) (pri r))
     pri (PApp _ f as) = max 1 (max (pri f) (foldr max 0 (map (pri.getTm) as))) 
     pri (PCase _ f as) = max 1 (max (pri f) (foldr max 0 (map (pri.snd) as))) 
@@ -825,7 +883,7 @@ dumpDecls (d:ds) = dumpDecl d ++ "\n" ++ dumpDecls ds
 dumpDecl (PFix _ f ops) = show f ++ " " ++ showSep ", " ops 
 dumpDecl (PTy _ _ _ n t) = "tydecl " ++ show n ++ " : " ++ showImp True t
 dumpDecl (PClauses _ _ n cs) = "pat " ++ show n ++ "\t" ++ showSep "\n\t" (map (showCImp True) cs)
-dumpDecl (PData _ _ d) = showDImp True d
+dumpDecl (PData _ _ _ d) = showDImp True d
 dumpDecl (PParams _ ns ps) = "params {" ++ show ns ++ "\n" ++ dumpDecls ps ++ "}\n"
 dumpDecl (PNamespace n ps) = "namespace {" ++ n ++ "\n" ++ dumpDecls ps ++ "}\n"
 dumpDecl (PSyntax _ syn) = "syntax " ++ show syn
@@ -909,7 +967,7 @@ matchClause' names i x y = checkRpts $ match (fullApp x) (fullApp y) where
     match (PQuote _) _ = return []
     match (PProof _) _ = return []
     match (PTactics _) _ = return []
-    match (PRefl _) (PRefl _) = return []
+    match (PRefl _ _) (PRefl _ _) = return []
     match (PResolveTC _) (PResolveTC _) = return []
     match (PTrue _) (PTrue _) = return []
     match (PFalse _) (PFalse _) = return []
@@ -926,7 +984,7 @@ matchClause' names i x y = checkRpts $ match (fullApp x) (fullApp y) where
                                                   return (mt ++ mty ++ ms)
     match (PHidden x) (PHidden y) = match' x y
     match Placeholder _ = return []
---     match _ Placeholder = return []
+    match _ Placeholder = return []
     match (PResolveTC _) _ = return []
     match a b | a == b = return []
               | otherwise = LeftErr (a, b)

@@ -174,7 +174,7 @@ mkUnderCon n missing = MN missing ("U_" ++ show n)
 
 instance Show DExp where
    show e = show' [] e where
-     show' env (DV (Loc i)) = env!!i
+     show' env (DV (Loc i)) = "var " ++ env!!i
      show' env (DV (Glob n)) = show n
      show' env (DApp _ e args) = show e ++ "(" ++
                                    showSep ", " (map (show' env) args) ++")"
@@ -189,6 +189,7 @@ instance Show DExp where
            = "foreign " ++ n ++ "(" ++ showSep ", " (map (show' env) (map snd args)) ++ ")"
      show' env (DOp f args) = show f ++ "(" ++ showSep ", " (map (show' env) args) ++ ")"
      show' env (DError str) = "error " ++ show str
+     show' env DNothing = "____"
 
      showAlt env (DConCase _ n args e) 
           = show n ++ "(" ++ showSep ", " (map show args) ++ ") => "
@@ -236,4 +237,12 @@ groupsOf x xs = let (batch, rest) = span (tagLT (x + tagHead xs)) xs in
         tagLT i (DConstCase (I j) _) = i < j
         tagLT i (DConCase j _ _ _) = i < j
         tagLT i (DDefaultCase _) = False
+
+dumpDefuns :: DDefs -> String
+dumpDefuns ds = showSep "\n" $ map showDef (toAlist ds)
+  where showDef (x, DFun fn args exp) 
+            = show fn ++ "(" ++ showSep ", " (map show args) ++ ") = \n\t" ++
+              show exp ++ "\n"
+        showDef (x, DConstructor n t a) = "Constructor " ++ show n ++ " " ++ show t
+
 

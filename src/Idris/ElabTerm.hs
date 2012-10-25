@@ -112,8 +112,8 @@ elab ist info pattern tcgen fn tm
         | otherwise = try (resolveTC 2 fn ist)
                           (do c <- unique_hole (MN 0 "c")
                               instanceArg c)
-    elab' ina (PRefl fc)     = elab' ina (PApp fc (PRef fc eqCon) [pimp (MN 0 "a") Placeholder,
-                                                           pimp (MN 0 "x") Placeholder])
+    elab' ina (PRefl fc t)   = elab' ina (PApp fc (PRef fc eqCon) [pimp (MN 0 "a") Placeholder,
+                                                           pimp (MN 0 "x") t])
     elab' ina (PEq fc l r)   = elab' ina (PApp fc (PRef fc eqTy) [pimp (MN 0 "a") Placeholder,
                                                           pimp (MN 0 "b") Placeholder,
                                                           pexp l, pexp r])
@@ -174,12 +174,20 @@ elab ist info pattern tcgen fn tm
     elab' ina@(_, a) (PLam n Placeholder sc)
           = do attack; intro (Just n); elabE (True, a) sc; solve
     elab' ina@(_, a) (PLam n ty sc)
-          = do tyn <- unique_hole (MN 0 "lamty")
+          = do hsin <- get_holes
+               ptmin <- get_term
+               tyn <- unique_hole (MN 0 "lamty")
                claim tyn RSet
                attack
+               ptm <- get_term
+               hs <- get_holes
+               -- trace ("BEFORE:\n" ++ show hsin ++ "\n" ++ show ptmin ++
+               --       "\nNOW:\n" ++ show hs ++ "\n" ++ show ptm) $ 
                introTy (Var tyn) (Just n)
                -- end_unify
                focus tyn
+               ptm <- get_term
+               hs <- get_holes
                elabE (True, a) ty
                elabE (True, a) sc
                solve
@@ -211,19 +219,6 @@ elab ist info pattern tcgen fn tm
                elabE (True, a) val
                elabE (True, a) sc
                solve
---     elab' ina (PTyped val ty)
---           = do tyn <- unique_hole (MN 0 "castty")
---                claim tyn RSet
---                valn <- unique_hole (MN 0 "castval")
---                claim valn (Var tyn)
---                focus tyn
---                elabE True ty
---                focus valn
---                elabE True val
---     elab' ina (PApp fc (PRef _ dsl) [arg])
---        | [d] <- lookupCtxt Nothing dsl (idris_dsls ist)
---                 = let dsl' = expandDo d (getTm arg) in
---                       trace (show dsl') $ elab' ina dsl'
     elab' (ina, g) tm@(PApp fc (PRef _ f) args') 
        = do let args = {- case lookupCtxt f (inblock info) of
                           Just ps -> (map (pexp . (PRef fc)) ps ++ args')
@@ -242,7 +237,8 @@ elab ist info pattern tcgen fn tm
                          = unzip $
                              sortBy (\(_,x) (_,y) -> compare (priority x) (priority y))
                                     (zip ns args)
-                    try (elabArgs (ina || not isinf, guarded)
+                    try 
+                        (elabArgs (ina || not isinf, guarded)
                              [] False ns' (map (\x -> (lazyarg x, getTm x)) eargs))
                         (elabArgs (ina || not isinf, guarded)
                              [] False (reverse ns') 
@@ -252,6 +248,8 @@ elab ist info pattern tcgen fn tm
                 (do apply_elab f (map (toElab (ina || not isinf, guarded)) args)
                     mkSpecialised ist fc f (map getTm args') tm
                     solve)
+--             ptm <- get_term
+--             elog (show ptm)
             ivs' <- get_instances
             when (not pattern || (ina && not tcgen)) $
                 mapM_ (\n -> do focus n
@@ -316,8 +314,8 @@ elab ist info pattern tcgen fn tm
                                      (map pexp args ++ [pexp l])) [] r []
 
     elabArgs ina failed retry [] _
-        | retry = let (ns, ts) = unzip (reverse failed) in
-                      elabArgs ina [] False ns ts
+--         | retry = let (ns, ts) = unzip (reverse failed) in
+--                       elabArgs ina [] False ns ts
         | otherwise = return ()
     elabArgs ina failed r (n:ns) ((_, Placeholder) : args) 
         = elabArgs ina failed r ns args
@@ -387,7 +385,8 @@ pruneByType (P _ n _) c as
 pruneByType t _ as = as
 
 trivial :: IState -> ElabD ()
-trivial ist = try (do elab ist toplevel False False (MN 0 "tac") (PRefl (FC "prf" 0))
+trivial ist = try (do elab ist toplevel False False (MN 0 "tac") 
+                                    (PRefl (FC "prf" 0) Placeholder)
                       return ())
                   (do env <- get_env
                       tryAll (map fst env)

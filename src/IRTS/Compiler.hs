@@ -12,6 +12,8 @@ import IRTS.CodegenJava
 import IRTS.Inliner
 
 import Idris.AbsSyntax
+import Idris.UnusedArgs
+
 import Core.TT
 import Core.Evaluate
 import Core.CaseTree
@@ -31,6 +33,7 @@ compile target f tm
         let tmnames = namesUsed (STerm tm)
         used <- mapM (allNames []) tmnames
         defsIn <- mkDecls tm (concat used)
+        findUnusedArgs (concat used)
         maindef <- irMain tm
         objs <- getObjectFiles
         libs <- getLibs
@@ -45,10 +48,19 @@ compile target f tm
         iLOG "Inlining"
         let defuns = inline defuns_in
         logLvl 5 $ show defuns
-
+        iLOG "Resolving variables for CG"
         -- iputStrLn $ showSep "\n" (map show (toAlist defuns))
         let checked = checkDefs defuns (toAlist defuns)
         outty <- outputTy
+        dumpCases <- getDumpCases
+        dumpDefun <- getDumpDefun
+        case dumpCases of
+            Nothing -> return ()
+            Just f -> liftIO $ writeFile f (showCaseTrees tagged)
+        case dumpDefun of
+            Nothing -> return ()
+            Just f -> liftIO $ writeFile f (dumpDefuns defuns)
+        iLOG "Building output"
         case checked of
             OK c -> case target of
                          ViaC -> liftIO $ codegenC c f outty hdrs 
@@ -67,6 +79,8 @@ compile target f tm
         mkObj f = f ++ " "
         mkLib l = "-l" ++ l ++ " "
 
+
+
 irMain :: TT Name -> Idris LDecl
 irMain tm = do i <- ir tm
                return $ LFun (MN 0 "runMain") [] (LForce i)
@@ -83,8 +97,17 @@ mkDecls :: Term -> [Name] -> Idris [(Name, LDecl)]
 mkDecls t used 
     = do i <- getIState
          let ds = filter (\ (n, d) -> n `elem` used || isCon d) $ ctxtAlist (tt_ctxt i)
+         mapM traceUnused used
          decls <- mapM build ds
          return decls
+
+showCaseTrees :: [(Name, LDecl)] -> String
+showCaseTrees ds = showSep "\n\n" (map showCT ds)
+  where
+    showCT (n, LFun f args lexp) 
+       = show n ++ " " ++ showSep " " (map show args) ++ " =\n\t "
+            ++ show lexp 
+    showCT (n, LConstructor c t a) = "data " ++ show n ++ " " ++ show a 
 
 isCon (TyDecl _ _) = True
 isCon _ = False
@@ -144,10 +167,25 @@ instance ToIR (TT Name) where
                    return t' -- TODO
           | (P (DCon t a) n _, args) <- unApply tm
               = irCon env t a n args
+          | (P _ n _, args) <- unApply tm
+              = do i <- get
+                   let collapse = case lookupCtxt Nothing n (idris_optimisation i) of
+                                    [oi] -> collapsible oi
+                                    _ -> False
+                   let unused = case lookupCtxt Nothing n (idris_callgraph i) of
+                                    [CGInfo _ _ _ _ unusedpos] -> unusedpos
+                                    _ -> []
+                   args' <- mapM (ir' env) args
+                   if collapse then return LNothing
+                               else return (LApp False (LV (Glob n)) 
+                                                 (mkUnused unused 0 args'))
           | (f, args) <- unApply tm
               = do f' <- ir' env f
                    args' <- mapM (ir' env) args
                    return (LApp False f' args')
+        where mkUnused u i [] = []
+              mkUnused u i (x : xs) | i `elem` u = LNothing : mkUnused u (i + 1) xs
+                                    | otherwise = x : mkUnused u (i + 1) xs
       ir' env (P _ n _) = return $ LV (Glob n)
       ir' env (V i)     | i < length env = return $ LV (Glob (env!!i))
                         | otherwise = error $ "IR fail " ++ show i ++ " " ++ show tm
@@ -159,11 +197,14 @@ instance ToIR (TT Name) where
           = do sc' <- ir' (n : env) sc
                v' <- ir' env v
                return $ LLet n v' sc'
-      ir' env (Bind _ _ _) = return $ LConst (I 424242)
+      ir' env (Bind _ _ _) = return $ LNothing
       ir' env (Proj t i) = do t' <- ir' env t
                               return $ LProj t' i
       ir' env (Constant c) = return $ LConst c
-      ir' env _ = return $ LError "Impossible"
+      ir' env (Set _) = return $ LNothing
+      ir' env Erased = return $ LNothing
+      ir' env Impossible = return $ LNothing
+--       ir' env _ = return $ LError "Impossible"
 
       irCon env t arity n args
         | length args == arity = buildApp env (LV (Glob n)) args
@@ -221,6 +262,7 @@ instance ToIR SC where
                                     return $ LCase tm' alts'
         ir' (Case n alts) = do alts' <- mapM mkIRAlt alts
                                return $ LCase (LV (Glob n)) alts'
+        ir' ImpossibleCase = return LNothing
 
         mkIRAlt (ConCase n t args rhs) 
              = do rhs' <- ir rhs
