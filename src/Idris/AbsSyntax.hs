@@ -44,7 +44,7 @@ addHdr :: String -> Idris ()
 addHdr f = do i <- get; put (i { idris_hdrs = f : idris_hdrs i })
 
 totcheck :: (FC, Name) -> Idris ()
-totcheck n = do i <- get; put (i { idris_totcheck = n : idris_totcheck i })
+totcheck n = do i <- get; put (i { idris_totcheck = idris_totcheck i ++ [n] })
 
 setFlags :: Name -> [FnOpt] -> Idris ()
 setFlags n fs = do i <- get; put (i { idris_flags = addDef n fs (idris_flags i) }) 
@@ -160,6 +160,13 @@ checkUndefined fc n
              (_:_)  -> fail $ show fc ++ ":" ++ 
                        show n ++ " already defined"
              _ -> return ()
+
+isUndefined :: FC -> Name -> Idris Bool
+isUndefined fc n 
+    = do i <- getContext
+         case lookupTy Nothing n i of
+             (_:_)  -> return False
+             _ -> return True
 
 setContext :: Context -> Idris ()
 setContext ctxt = do i <- get; put (i { tt_ctxt = ctxt } )
@@ -339,6 +346,10 @@ logLvl l str = do i <- get
                       $ do liftIO (putStrLn str)
                            put (i { idris_log = idris_log i ++ str ++ "\n" } )
 
+cmdOptSet :: Opt -> Idris Bool
+cmdOptSet x = do i <- get
+                 return $ x `elem` opt_cmdline (idris_options i)
+
 iLOG :: String -> Idris ()
 iLOG = logLvl 1
 
@@ -427,10 +438,6 @@ piBindp :: Plicity -> [(Name, PTerm)] -> PTerm -> PTerm
 piBindp p [] t = t
 piBindp p ((n, ty):ns) t = PPi p n ty (piBind ns t)
     
-tcname (UN ('@':_)) = True
-tcname (NS n _) = tcname n
-tcname _ = False
-
 -- Dealing with parameters
 
 expandParams :: (Name -> Name) -> [(Name, PTerm)] -> [Name] -> PTerm -> PTerm
@@ -628,7 +635,8 @@ implicit' syn ignore n ptm
 implicitise :: SyntaxInfo -> [Name] -> IState -> PTerm -> (PTerm, [PArg])
 implicitise syn ignore ist tm
     = let (declimps, ns') = execState (imps True [] tm) ([], []) 
-          ns = ns' \\ (map fst pvars ++ no_imp syn ++ ignore) in
+          ns = filter (\n -> implicitable n || elem n (map fst uvars)) $
+                  ns' \\ (map fst pvars ++ no_imp syn ++ ignore) in
           if null ns 
             then (tm, reverse declimps) 
             else implicitise syn ignore ist (pibind uvars ns tm)
@@ -707,7 +715,10 @@ implicitise syn ignore ist tm
     pibind using (n:ns) sc 
       = case lookup n using of
             Just ty -> PPi (Imp False Dynamic) n ty (pibind using ns sc)
-            Nothing -> PPi (Imp False Dynamic) n Placeholder (pibind using ns sc)
+            Nothing -> if (implicitable n)
+                          then PPi (Imp False Dynamic) n Placeholder 
+                                   (pibind using ns sc)
+                          else pibind using ns sc
 
 -- Add implicit arguments in function calls
 addImplPat :: IState -> PTerm -> PTerm

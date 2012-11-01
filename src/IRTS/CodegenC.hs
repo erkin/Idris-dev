@@ -52,7 +52,8 @@ codegenC defs out exec incs objs libs dbg
              when (exit /= ExitSuccess) $
                 putStrLn ("FAILURE: " ++ gcc)
 
-headers [] = "#include <idris_rts.h>\n#include <idris_stdfgn.h>\n#include <assert.h>\n"
+headers [] = "#include <idris_rts.h>\n#include <idris_stdfgn.h>\n" ++
+             "#include <gmp.h>\n#include <assert.h>\n"
 headers (x : xs) = "#include <" ++ x ++ ">\n" ++ headers xs
 
 debug TRACE = "#define IDRIS_TRACE\n\n"
@@ -98,7 +99,7 @@ bcc i (ASSIGNCONST l c)
     mkConst _ = "MKINT(42424242)"
 bcc i (MKCON l tag args)
     = indent i ++ creg Tmp ++ " = allocCon(vm, " ++ show (length args) ++ 
-         "); " ++ "SETTAG(" ++ creg Tmp ++ ", " ++ show tag ++ ");\n" ++
+         ", 0); " ++ "SETTAG(" ++ creg Tmp ++ ", " ++ show tag ++ ");\n" ++
       indent i ++ setArgs 0 args ++ "\n" ++ 
       indent i ++ creg l ++ " = " ++ creg Tmp ++ ";\n"
          
@@ -125,16 +126,46 @@ bcc i (CASE r code def)
     showDef i (Just c) = indent i ++ "default:\n" 
                          ++ concatMap (bcc (i+1)) c ++ indent (i + 1) ++ "break;\n"
 bcc i (CONSTCASE r code def) 
-    = indent i ++ "switch(GETINT(" ++ creg r ++ ")) {\n" ++
-      concatMap (showCase i) code ++
-      showDef i def ++
-      indent i ++ "}\n"
+   | intConsts code
+     = indent i ++ "switch(GETINT(" ++ creg r ++ ")) {\n" ++
+       concatMap (showCase i) code ++
+       showDef i def ++
+       indent i ++ "}\n"
+   | strConsts code
+     = concatMap (strCase ("GETSTR(" ++ creg r ++ ")")) code ++
+       indent i ++ "{\n" ++ showDefS i def ++ indent i ++ "}\n"
+   | bigintConsts code
+     = concatMap (biCase (creg r)) code ++
+       indent i ++ "{\n" ++ showDefS i def ++ indent i ++ "}\n"
+   | otherwise = error $ "Can't happen: Can't compile const case " ++ show code
   where
+    intConsts ((I _, _ ) : _) = True
+    intConsts ((Ch _, _ ) : _) = True
+    intConsts _ = False
+
+    bigintConsts ((BI _, _ ) : _) = True
+    bigintConsts _ = False
+
+    strConsts ((Str _, _ ) : _) = True
+    strConsts _ = False
+
+    strCase sv (s, bc) =
+        indent i ++ "if (strcmp(" ++ sv ++ ", " ++ show s ++ ") == 0) {\n" ++
+           concatMap (bcc (i+1)) bc ++ indent i ++ "} else\n"
+    biCase bv (BI b, bc) =
+        indent i ++ "if (bigEqConst(" ++ bv ++ ", " ++ show b ++ ")) {\n"
+           ++ concatMap (bcc (i+1)) bc ++ indent i ++ "} else\n"
+
     showCase i (t, bc) = indent i ++ "case " ++ show t ++ ":\n"
-                         ++ concatMap (bcc (i+1)) bc ++ indent (i + 1) ++ "break;\n"
+                         ++ concatMap (bcc (i+1)) bc ++ 
+                            indent (i + 1) ++ "break;\n"
     showDef i Nothing = ""
     showDef i (Just c) = indent i ++ "default:\n" 
-                         ++ concatMap (bcc (i+1)) c ++ indent (i + 1) ++ "break;\n"
+                         ++ concatMap (bcc (i+1)) c ++ 
+                            indent (i + 1) ++ "break;\n"
+    showDefS i Nothing = ""
+    showDefS i (Just c) = concatMap (bcc (i+1)) c
+
 bcc i (CALL n) = indent i ++ "CALL(" ++ cname n ++ ");\n"
 bcc i (TAILCALL n) = indent i ++ "TAILCALL(" ++ cname n ++ ");\n"
 bcc i (SLIDE n) = indent i ++ "SLIDE(vm, " ++ show n ++ ");\n"
@@ -243,6 +274,7 @@ doOp v LStdOut [] = v ++ "MKPTR(vm, stdout)"
 doOp v LStdErr [] = v ++ "MKPTR(vm, stderr)"
 
 doOp v LFork [x] = v ++ "MKPTR(vm, vmThread(vm, " ++ cname (MN 0 "EVAL") ++ ", " ++ creg x ++ "))"
+doOp v LPar [x] = v ++ creg x -- "MKPTR(vm, vmThread(vm, " ++ cname (MN 0 "EVAL") ++ ", " ++ creg x ++ "))"
 doOp v LVMPtr [] = v ++ "MKPTR(vm, vm)"
 doOp v LNoOp args = ""
 doOp _ _ _ = "FAIL"

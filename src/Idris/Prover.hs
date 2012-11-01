@@ -32,7 +32,7 @@ prover lit x =
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps 
     = bird ++ show n ++ " = proof {" ++ break ++
-             showSep break (map (\x -> "    " ++ x ++ ";") ps) ++
+             showSep break (map (\x -> "  " ++ x ++ ";") ps) ++
                      break ++ "}\n"
   where bird = if lit then "> " else ""
         break = "\n" ++ bird
@@ -50,8 +50,10 @@ prove ctxt lit n ty
          logLvl 3 (show tree)
          (ptm, pty) <- recheckC (FC "proof" 0) [] tm
          ptm' <- applyOpts ptm
-         updateContext (addCasedef n True False True [([], P Ref n ty, ptm)] 
-                                                [([], P Ref n ty, ptm')] ty)
+         updateContext (addCasedef n True False True 
+                                 [Right (P Ref n ty, ptm)]
+                                 [([], P Ref n ty, ptm)] 
+                                 [([], P Ref n ty, ptm')] ty)
          solveDeferred n
 elabStep :: ElabState [PDecl] -> ElabD a -> Idris (a, ElabState [PDecl])
 elabStep st e = do case runStateT e st of

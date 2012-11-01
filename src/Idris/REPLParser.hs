@@ -23,6 +23,8 @@ pCmd :: IParser Command
 pCmd = try (do cmd ["q", "quit"]; eof; return Quit)
    <|> try (do cmd ["h", "?", "help"]; eof; return Help)
    <|> try (do cmd ["r", "reload"]; eof; return Reload)
+   <|> try (do cmd ["m", "module"]; f <- identifier; eof;
+               return (ModImport (map dot f)))
    <|> try (do cmd ["e", "edit"]; eof; return Edit)
    <|> try (do cmd ["exec", "execute"]; eof; return Execute)
    <|> try (do cmd ["ttshell"]; eof; return TTShell)
@@ -38,6 +40,7 @@ pCmd = try (do cmd ["q", "quit"]; eof; return Quit)
    <|> try (do cmd ["rmproof"]; n <- pName; eof; return (RmProof n))
    <|> try (do cmd ["showproof"]; n <- pName; eof; return (ShowProof n))
    <|> try (do cmd ["log"]; i <- natural; eof; return (LogLvl (fromIntegral i)))
+   <|> try (do cmd ["l", "load"]; f <- getInput; return (Load f))
    <|> try (do cmd ["spec"]; t <- pFullExpr defaultSyntax; return (Spec t))
    <|> try (do cmd ["hnf"]; t <- pFullExpr defaultSyntax; return (HNF t))
    <|> try (do cmd ["d", "def"]; n <- pfName; eof; return (Defn n))
@@ -54,6 +57,9 @@ pCmd = try (do cmd ["q", "quit"]; eof; return Quit)
    <|> try (do cmd ["patt"]; t <- pFullExpr defaultSyntax; return (Pattelab t))
    <|> do t <- pFullExpr defaultSyntax; return (Eval t)
    <|> do eof; return NOP
+
+ where dot '.' = '/'
+       dot c = c
 
 pOption :: IParser Opt
 pOption = do discard (symbol "errorcontext"); return ErrContext

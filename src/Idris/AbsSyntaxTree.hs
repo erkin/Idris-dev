@@ -15,7 +15,7 @@ import Paths_idris
 
 import System.Console.Haskeline
 
-import Control.Monad.State
+import Control.Monad.Trans.State.Strict
 
 import Data.List
 import Data.Char
@@ -85,14 +85,16 @@ data IState = IState {
    }
 
 data SizeChange = Smaller | Same | Bigger | Unknown
-    deriving Show
+    deriving (Show, Eq)
 {-! 
 deriving instance Binary SizeChange
 !-}
 
+type SCGEntry = (Name, [Maybe (Int, SizeChange)])
+
 data CGInfo = CGInfo { argsdef :: [Name],
                        calls :: [(Name, [[Name]])],
-                       scg :: [(Name, [Maybe (Name, SizeChange)])],
+                       scg :: [SCGEntry],
                        argsused :: [Name],
                        unusedpos :: [Int] }
     deriving Show
@@ -145,6 +147,8 @@ data Command = Quit
              | Check PTerm
              | TotCheck Name
              | Reload
+             | Load FilePath 
+             | ModImport String 
              | Edit
              | Compile Target String
              | Execute
@@ -186,6 +190,7 @@ data Opt = Filename String
          | TypeInType
          | DefaultTotal
          | DefaultPartial
+         | WarnPartial
          | NoCoverage 
          | ErrContext 
          | ShowImpl
@@ -259,7 +264,8 @@ expl = Exp False Dynamic
 constraint = Constraint False Dynamic
 tacimpl = TacImp False Dynamic
 
-data FnOpt = Inlinable | TotalFn | Coinductive | AssertTotal | TCGen
+data FnOpt = Inlinable | TotalFn | PartialFn
+           | Coinductive | AssertTotal | TCGen
            | CExport String    -- export, with a C name
            | Specialise [Name] -- specialise it, freeze these names
     deriving (Show, Eq)
@@ -294,6 +300,7 @@ data PDecl' t = PFix     FC Fixity [String] -- fixity declaration
                                         [PDecl' t]
               | PDSL     Name (DSL' t)
               | PSyntax  FC Syntax
+              | PMutual  FC [PDecl' t]
               | PDirective (Idris ())
     deriving Functor
 {-!
@@ -312,6 +319,7 @@ deriving instance Binary PClause'
 data PData' t  = PDatadecl { d_name :: Name,
                              d_tcon :: t,
                              d_cons :: [(Name, t, FC)] }
+               | PLaterdecl { d_name :: Name, d_tcon :: t }
     deriving Functor
 {-!
 deriving instance Binary PData'

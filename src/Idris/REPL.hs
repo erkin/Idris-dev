@@ -41,7 +41,8 @@ import System.Process
 import System.Directory
 import System.IO
 import Control.Monad
-import Control.Monad.State
+import Control.Monad.Trans.State.Strict ( StateT, execStateT, get, put )
+import Control.Monad.Trans ( liftIO, lift )
 import Data.Maybe
 import Data.List
 import Data.Char
@@ -81,21 +82,31 @@ processInput cmd orig inputs
                         (f:_) -> f
                         _ -> ""
          case parseCmd i cmd of
-                Left err ->   do liftIO $ print err
-                                 return (Just inputs)
-                Right Reload -> do put (orig { idris_options = idris_options i })
-                                   clearErr
-                                   mods <- mapM loadModule inputs  
-                                   return (Just inputs)
-                Right Edit -> do edit fn orig
-                                 return (Just inputs)
-                Right Proofs -> do proofs orig
-                                   return (Just inputs)
-                Right Quit -> do iputStrLn "Bye bye"
-                                 return Nothing
-                Right cmd  -> do idrisCatch (process fn cmd)
-                                            (\e -> iputStrLn (show e))
-                                 return (Just inputs)
+            Left err ->   do liftIO $ print err
+                             return (Just inputs)
+            Right Reload -> 
+                do put (orig { idris_options = idris_options i })
+                   clearErr
+                   mods <- mapM loadModule inputs  
+                   return (Just inputs)
+            Right (Load f) -> 
+                do put (orig { idris_options = idris_options i })
+                   clearErr
+                   mod <- loadModule f
+                   return (Just [f])
+            Right (ModImport f) -> 
+                do clearErr
+                   fmod <- loadModule f
+                   return (Just (inputs ++ [fmod]))
+            Right Edit -> do edit fn orig
+                             return (Just inputs)
+            Right Proofs -> do proofs orig
+                               return (Just inputs)
+            Right Quit -> do iputStrLn "Bye bye"
+                             return Nothing
+            Right cmd  -> do idrisCatch (process fn cmd)
+                                        (\e -> iputStrLn (show e))
+                             return (Just inputs)
 
 resolveProof :: Name -> Idris Name
 resolveProof n'
@@ -206,28 +217,31 @@ process fn (Defn n) = do i <- get
                          case lookupTotal n (tt_ctxt i) of
                             [t] -> iputStrLn (showTotal t i)
                             _ -> return ()
-    where printCase i (_, lhs, rhs) = do liftIO $ putStr $ showImp True (delab i lhs)
-                                         liftIO $ putStr " = "
-                                         liftIO $ putStrLn $ showImp True (delab i rhs)
+    where printCase i (_, lhs, rhs) 
+             = do liftIO $ putStr $ showImp True (delab i lhs)
+                  liftIO $ putStr " = "
+                  liftIO $ putStrLn $ showImp True (delab i rhs)
 process fn (TotCheck n) = do i <- get
                              case lookupTotal n (tt_ctxt i) of
                                 [t] -> iputStrLn (showTotal t i)
                                 _ -> return ()
 process fn (DebugInfo n) 
-                    = do i <- get
-                         let oi = lookupCtxtName Nothing n (idris_optimisation i)
-                         when (not (null oi)) $ iputStrLn (show oi)
-                         let si = lookupCtxt Nothing n (idris_statics i)
-                         when (not (null si)) $ iputStrLn (show si)
-                         let d = lookupDef Nothing n (tt_ctxt i)
-                         when (not (null d)) $ liftIO $
-                            do print (head d)
-                         let cg = lookupCtxtName Nothing n (idris_callgraph i)
-                         findUnusedArgs (map fst cg)
-                         i <- get
-                         let cg' = lookupCtxtName Nothing n (idris_callgraph i)
-                         when (not (null cg')) $ do iputStrLn "Call graph:\n"
-                                                    iputStrLn (show cg')
+   = do i <- get
+        let oi = lookupCtxtName Nothing n (idris_optimisation i)
+        when (not (null oi)) $ iputStrLn (show oi)
+        let si = lookupCtxt Nothing n (idris_statics i)
+        when (not (null si)) $ iputStrLn (show si)
+        let d = lookupDef Nothing n (tt_ctxt i)
+        when (not (null d)) $ liftIO $
+           do print (head d)
+        let cg = lookupCtxtName Nothing n (idris_callgraph i)
+        findUnusedArgs (map fst cg)
+        i <- get
+        let cg' = lookupCtxtName Nothing n (idris_callgraph i)
+        sc <- checkSizeChange n
+        iputStrLn $ "Size change: " ++ show sc
+        when (not (null cg')) $ do iputStrLn "Call graph:\n"
+                                   iputStrLn (show cg')
 process fn (Info n) = do i <- get
                          case lookupCtxt Nothing n (idris_classes i) of
                               [c] -> classInfo c
@@ -236,7 +250,7 @@ process fn (Search t) = iputStrLn "Not implemented"
 process fn (Spec t) = do (tm, ty) <- elabVal toplevel False t
                          ctxt <- getContext
                          ist <- get
-                         let tm' = simplify ctxt [] {- (idris_statics ist) -} tm
+                         let tm' = simplify ctxt True [] {- (idris_statics ist) -} tm
                          iputStrLn (show (delab ist tm'))
 
 process fn (RmProof n')
@@ -300,7 +314,7 @@ process fn (Prove n')
 process fn (HNF t)  = do (tm, ty) <- elabVal toplevel False t
                          ctxt <- getContext
                          ist <- get
-                         let tm' = simplify ctxt [] tm
+                         let tm' = simplify ctxt True [] tm
                          iputStrLn (show (delab ist tm'))
 process fn TTShell  = do ist <- get
                          let shst = initState (tt_ctxt ist)
@@ -338,7 +352,7 @@ process fn (Pattelab t)
 
 process fn (Missing n) = do i <- get
                             case lookupDef Nothing n (tt_ctxt i) of
-                                [CaseOp _ _ _ args t _ _]
+                                [CaseOp _ _ _ _ _ args t _ _]
                                     -> do tms <- genMissing n args t
                                           iputStrLn (showSep "\n" (map (showImp True) tms))
                                 [] -> iputStrLn $ show n ++ " undefined"
@@ -404,6 +418,7 @@ parseArgs ("--typecase":ns)     = TypeCase : (parseArgs ns)
 parseArgs ("--typeintype":ns)   = TypeInType : (parseArgs ns)
 parseArgs ("--total":ns)        = DefaultTotal : (parseArgs ns)
 parseArgs ("--partial":ns)      = DefaultPartial : (parseArgs ns)
+parseArgs ("--warnpartial":ns)  = WarnPartial : (parseArgs ns)
 parseArgs ("--nocoverage":ns)   = NoCoverage : (parseArgs ns)
 parseArgs ("--errorcontext":ns) = ErrContext : (parseArgs ns)
 parseArgs ("--help":ns)         = Usage : (parseArgs ns)
@@ -438,6 +453,8 @@ help =
     ([":i", ":info"], "<name>", "Display information about a type class"),
     ([":total"], "<name>", "Check the totality of a name"),
     ([":r",":reload"], "", "Reload current file"),
+    ([":l",":load"], "<filename>", "Load a new file"),
+    ([":m",":module"], "<module>", "Import an extra module"),
     ([":e",":edit"], "", "Edit current file using $EDITOR or $VISUAL"),
     ([":m",":metavars"], "", "Show remaining proof obligations (metavariables)"),
     ([":p",":prove"], "<name>", "Prove a metavariable"),

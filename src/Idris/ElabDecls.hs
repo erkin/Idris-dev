@@ -76,7 +76,7 @@ elabType info syn fc opts n ty' = {- let ty' = piBind (params info) ty_in
                          addIBC (IBCAccess n Frozen)
 
 elabData :: ElabInfo -> SyntaxInfo -> FC -> Bool -> PData -> Idris ()
-elabData info syn fc codata (PDatadecl n t_in dcons)
+elabData info syn fc codata (PLaterdecl n t_in)
     = do iLOG (show fc)
          checkUndefined fc n
          ctxt <- getContext
@@ -91,6 +91,23 @@ elabData info syn fc codata (PDatadecl n t_in dcons)
          (cty, _)  <- recheckC fc [] t'
          logLvl 2 $ "---> " ++ show cty
          updateContext (addTyDecl n cty) -- temporary, to check cons
+
+elabData info syn fc codata (PDatadecl n t_in dcons)
+    = do iLOG (show fc)
+         undef <- isUndefined fc n
+         ctxt <- getContext
+         i <- get
+         t_in <- implicit syn n t_in
+         let t = addImpl i t_in
+         ((t', defer, is), log) <- tclift $ elaborate ctxt n (Set (UVal 0)) []
+                                            (erun fc (build i info False n t))
+         def' <- checkDef fc defer
+         addDeferred def'
+         mapM_ (elabCaseBlock info) is
+         (cty, _)  <- recheckC fc [] t'
+         logLvl 2 $ "---> " ++ show cty
+         -- temporary, to check cons
+         when undef $ updateContext (addTyDecl n cty) 
          cons <- mapM (elabCon info syn n codata) dcons
          ttag <- getName
          i <- get
@@ -123,7 +140,7 @@ elabRecord info syn fc tyn ty cn cty
          let nonImp = mapMaybe isNonImp (zip cimp ptys_u)
          let implBinds = getImplB id cty'
          update_decls <- mapM (mkUpdate recty implBinds (length nonImp)) (zip nonImp [0..])
-         mapM_ (elabDecl info) (concat proj_decls)
+         mapM_ (elabDecl EAll info) (concat proj_decls)
          mapM_ (tryElabDecl info) (update_decls)
   where
 --     syn = syn_in { syn_namespace = show (nsroot tyn) : syn_namespace syn_in }
@@ -133,8 +150,8 @@ elabRecord info syn fc tyn ty cn cty
 
     tryElabDecl info (fn, ty, val)
         = do i <- get
-             idrisCatch (do elabDecl' info ty
-                            elabDecl' info val)
+             idrisCatch (do elabDecl' EAll info ty
+                            elabDecl' EAll info val)
                         (\v -> do iputStrLn $ show fc ++ 
                                       ":Warning - can't generate setter for " ++ 
                                       show fn ++ " (" ++ show ty ++ ")"
@@ -282,7 +299,7 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
 --                                         show l ++ " = " ++ 
 --                                         show r) pats))
          let tcase = opt_typecase (idris_options ist)
-         let pdef = map debind $ map (simpl (tt_ctxt ist)) pats
+         let pdef = map debind $ map (simpl False (tt_ctxt ist)) pats
          
          numArgs <- tclift $ sameLength pdef
 
@@ -294,8 +311,9 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
          logLvl 5 $ "Patterns:\n" ++ show pats
          logLvl 5 $ "Optimised patterns:\n" ++ show optpats
 
-         let optpdef = map debind $ map (simpl (tt_ctxt ist)) optpats
-         tree@(CaseDef scargs sc _) <- tclift $ simpleCase tcase False CompileTime fc pdef
+         let optpdef = map debind $ map (simpl True (tt_ctxt ist)) optpats
+         tree@(CaseDef scargs sc _) <- tclift $ 
+                 simpleCase tcase False CompileTime fc pdef
          cov <- coverage
          pmissing <-
                  if cov  
@@ -325,9 +343,9 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
          case tree of
              CaseDef _ _ [] -> return ()
              CaseDef _ _ xs -> mapM_ (\x ->
-                                        iputStrLn $ show fc ++
-                                                    ":warning - Unreachable case: " ++ 
-                                                    show (delab ist x)) xs
+                 iputStrLn $ show fc ++
+                              ":warning - Unreachable case: " ++ 
+                                 show (delab ist x)) xs
          tree' <- tclift $ simpleCase tcase pcover RunTime fc pdef'
          logLvl 3 (show tree)
          logLvl 3 $ "Optimised: " ++ show tree'
@@ -336,18 +354,20 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
          put (ist { idris_patdefs = addDef n pdef' (idris_patdefs ist) })
          case lookupTy (namespace info) n ctxt of
              [ty] -> do updateContext (addCasedef n (inlinable opts)
-                                                     tcase pcover pdef pdef' ty)
+                                                     tcase pcover pats
+                                                     pdef pdef' ty)
                         addIBC (IBCDef n)
                         setTotality n tot
                         totcheck (fc, n)
                         when (tot /= Unchecked) $ addIBC (IBCTotal n tot)
                         i <- get
                         case lookupDef Nothing n (tt_ctxt i) of
-                            (CaseOp _ _ _ scargs sc scargs' sc' : _) ->
+                            (CaseOp _ _ _ _ _ scargs sc scargs' sc' : _) ->
                                 do let calls = findCalls sc' scargs'
                                    let used = findUsedArgs sc' scargs'
-                                   let scg = buildSCG i sc scargs
-                                   let cg = CGInfo scargs' calls scg used []
+                                   -- let scg = buildSCG i sc scargs
+                                   -- add SCG later, when checking totality
+                                   let cg = CGInfo scargs' calls [] used []
                                    logLvl 2 $ "Called names: " ++ show cg
                                    addToCG n cg
                                    addToCalledG n (nub (map fst calls)) -- plus names in type!
@@ -367,8 +387,8 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
     
     getLHS (_, l, _) = l
 
-    simpl ctxt (Right (x, y)) = Right (x, simplify ctxt [] y)
-    simpl ctxt t = t
+    simpl rt ctxt (Right (x, y)) = Right (x, simplify ctxt rt [] y)
+    simpl rt ctxt t = t
 
     sameLength ((_, x, _) : xs) 
         = do l <- sameLength xs
@@ -441,7 +461,7 @@ elabClause info tcgen (PClause fc fname lhs_in withs rhs_in whereblock)
         let newargs = pvars ist lhs_tm
         let wb = map (expandParamsD ist decorate newargs decls) whereblock
         logLvl 5 $ "Where block: " ++ show wb
-        mapM_ (elabDecl' info) wb
+        mapM_ (elabDecl' EAll info) wb
         -- Now build the RHS, using the type of the LHS as the goal.
         i <- get -- new implicits from where block
         logLvl 5 (showImp True (expandParams decorate newargs decls rhs_in))
@@ -475,7 +495,7 @@ elabClause info tcgen (PClause fc fname lhs_in withs rhs_in whereblock)
         checkInferred fc (delab' i crhs True) rhs
         return $ Right (clhs, crhs)
   where
-    decorate x = UN (show fname ++ "#" ++ show x)
+    decorate x = UN (show x ++ "#" ++ show fname)
     pinfo ns ps i 
           = let ds = concatMap declared ps
                 newps = params info ++ ns
@@ -539,7 +559,7 @@ elabClause info tcgen (PWith fc fname lhs_in withs wval_in withblock)
         --    ==>  fname' ps   wpat [rest], match pats against toplevel for ps
         wb <- mapM (mkAuxC wname lhs (map fst bargs)) withblock
         logLvl 5 ("with block " ++ show wb)
-        mapM_ (elabDecl info) wb
+        mapM_ (elabDecl EAll info) wb
 
         -- rhs becomes: fname' ps wval
         let rhs = PApp fc (PRef fc wname) (map (pexp . (PRef fc) . fst) bargs ++ 
@@ -625,12 +645,12 @@ elabClass info syn fc constraints tn ps ds
          logLvl 5 $ "Building functions"
          let usyn = syn { using = ps ++ using syn }
          fns <- mapM (cfun cn constraint usyn (map fst imethods)) constraints
-         mapM_ (elabDecl info) (concat fns)
+         mapM_ (elabDecl EAll info) (concat fns)
          -- for each method, build a top level function
          fns <- mapM (tfun cn constraint usyn (map fst imethods)) imethods
-         mapM_ (elabDecl info) (concat fns)
+         mapM_ (elabDecl EAll info) (concat fns)
          -- add the default definitions
-         mapM_ (elabDecl info) (concat (map (snd.snd) defs))
+         mapM_ (elabDecl EAll info) (concat (map (snd.snd) defs))
          i <- get
          let defaults = map (\ (x, (y, z)) -> (x,y)) defs
          addClass tn (CI cn imethods defaults (map fst ps) []) 
@@ -765,16 +785,20 @@ elabInstance info syn fc cs n ps t expn ds
                     _ -> []
          let mtys = map (\ (n, (op, t)) -> 
                                 let t' = substMatches ips t in
-                                    (decorate ns n, op, coninsert cs t', t'))
+                                    (decorate ns iname n, 
+                                        op, coninsert cs t', t'))
                         (class_methods ci)
          logLvl 3 (show (mtys, ips))
-         let ds' = insertDefaults i (class_defaults ci) ns ds
+         let ds' = insertDefaults i iname (class_defaults ci) ns ds
          iLOG ("Defaults inserted: " ++ show ds' ++ "\n" ++ show ci)
-         mapM_ (warnMissing ds' ns) (map fst (class_methods ci))
+         mapM_ (warnMissing ds' ns iname) (map fst (class_methods ci))
          mapM_ (checkInClass (map fst (class_methods ci))) (concatMap defined ds')
-         let wb = map mkTyDecl mtys ++ map (decorateid (decorate ns)) ds'
+         let wbTys = map mkTyDecl mtys
+         let wbVals = map (decorateid (decorate ns iname)) ds'
+         let wb = wbTys ++ wbVals
          logLvl 3 $ "Method types " ++ showSep "\n" (map (showDeclImp True . mkTyDecl) mtys)
-         -- get the implicit parameters that need passing through to the where block
+         -- get the implicit parameters that need passing through to the 
+         -- where block
          wparams <- mapM (\p -> case p of
                                   PApp _ _ args -> getWParams args
                                   _ -> return []) ps
@@ -785,10 +809,10 @@ elabInstance info syn fc cs n ps t expn ds
                         as -> PApp fc (PRef fc iname) as
          let rhs = PApp fc (PRef fc (instanceName ci))
                            (map (pexp . mkMethApp) mtys)
-         let idecl = PClauses fc [Inlinable, TCGen] iname 
-                                 [PClause fc iname lhs [] rhs wb]
-         iLOG (show idecl)
-         elabDecl info idecl
+         let idecls = [PClauses fc [Inlinable, TCGen] iname 
+                                 [PClause fc iname lhs [] rhs wb]]
+         iLOG (show idecls)
+         mapM (elabDecl EAll info) idecls
          addIBC (IBCInstance intInst n iname)
   where
     intInst = case ps of
@@ -838,8 +862,8 @@ elabInstance info syn fc cs n ps t expn ds
                 _ -> return ps'
     getWParams (_ : ps) = getWParams ps
 
-    decorate ns (UN n) = NS (UN ('!':n)) ns
-    decorate ns (NS (UN n) s) = NS (UN ('!':n)) ns
+    decorate ns iname (UN n) = NS (UN ('!':n)) ns
+    decorate ns iname (NS (UN n) s) = NS (UN ('!':n)) ns
 
     mkTyDecl (n, op, t, _) = PTy syn fc op n t
 
@@ -849,20 +873,22 @@ elabInstance info syn fc cs n ps t expn ds
     coninsert cs (PPi p@(Imp _ _) n t sc) = PPi p n t (coninsert cs sc)
     coninsert cs sc = conbind cs sc
 
-    insertDefaults :: IState -> [(Name, (Name, PDecl))] -> [String] -> [PDecl] -> [PDecl]
-    insertDefaults i [] ns ds = ds
-    insertDefaults i ((n,(dn, clauses)) : defs) ns ds 
-       = insertDefaults i defs ns (insertDef i n dn clauses ns ds)
+    insertDefaults :: IState -> Name ->
+                      [(Name, (Name, PDecl))] -> [String] -> 
+                      [PDecl] -> [PDecl]
+    insertDefaults i iname [] ns ds = ds
+    insertDefaults i iname ((n,(dn, clauses)) : defs) ns ds 
+       = insertDefaults i iname defs ns (insertDef i n dn clauses ns iname ds)
 
-    insertDef i meth def clauses ns decls
-        | null $ filter (clauseFor meth ns) decls
+    insertDef i meth def clauses ns iname decls
+        | null $ filter (clauseFor meth iname ns) decls
             = let newd = expandParamsD i (\n -> meth) [] [def] clauses in
                   -- trace (show newd) $ 
                   decls ++ [newd]
         | otherwise = decls
 
-    warnMissing decls ns meth
-        | null $ filter (clauseFor meth ns) decls
+    warnMissing decls ns iname meth
+        | null $ filter (clauseFor meth iname ns) decls
             = iWarn fc $ "method " ++ show meth ++ " not defined"
         | otherwise = return ()
 
@@ -873,8 +899,9 @@ elabInstance info syn fc cs n ps t expn ds
 
     eqRoot x y = nsroot x == nsroot y
 
-    clauseFor m ns (PClauses _ _ m' _) = decorate ns m == decorate ns m'
-    clauseFor m ns _ = False
+    clauseFor m iname ns (PClauses _ _ m' _) 
+       = decorate ns iname m == decorate ns iname m'
+    clauseFor m iname ns _ = False
 
 decorateid decorate (PTy s f o n t) = PTy s f o (decorate n) t
 decorateid decorate (PClauses f o n cs) 
@@ -902,31 +929,51 @@ psolve tm = return ()
 pvars ist (Bind n (PVar t) sc) = (n, delab ist t) : pvars ist sc
 pvars ist _ = []
 
--- TODO: Also build a 'binary' version of each declaration for fast reloading
+data ElabWhat = ETypes | EDefns | EAll
+  deriving (Show, Eq)
 
-elabDecl :: ElabInfo -> PDecl -> Idris ()
-elabDecl info d = idrisCatch (elabDecl' info d) 
-                             (\e -> do let msg = show e
-                                       setErrLine (getErrLine msg)
-                                       iputStrLn msg)
+elabDecls :: ElabInfo -> [PDecl] -> Idris ()
+elabDecls info ds = do mapM_ (elabDecl EAll info) ds
+--                       mapM_ (elabDecl EDefns info) ds
 
-elabDecl' info (PFix _ _ _)      = return () -- nothing to elaborate
-elabDecl' info (PSyntax _ p) = return () -- nothing to elaborate
-elabDecl' info (PTy s f o n ty)    = do iLOG $ "Elaborating type decl " ++ show n ++ show o
-                                        elabType info s f o n ty
-elabDecl' info (PData s f co d)    = do iLOG $ "Elaborating " ++ show (d_name d)
-                                        elabData info s f co d
-elabDecl' info d@(PClauses f o n ps) = do iLOG $ "Elaborating clause " ++ show n
-                                          i <- get -- get the type options too
-                                          let o' = case lookupCtxt Nothing n (idris_flags i) of
-                                                    [fs] -> fs
-                                                    [] -> []
-                                          elabClauses info f (o ++ o') n ps
-elabDecl' info (PParams f ns ps) 
+elabDecl :: ElabWhat -> ElabInfo -> PDecl -> Idris ()
+elabDecl what info d 
+    = idrisCatch (elabDecl' what info d) 
+                 (\e -> do let msg = show e
+                           setErrLine (getErrLine msg)
+                           iputStrLn msg)
+
+elabDecl' _ info (PFix _ _ _)
+     = return () -- nothing to elaborate
+elabDecl' _ info (PSyntax _ p) 
+     = return () -- nothing to elaborate
+elabDecl' what info (PTy s f o n ty)    
+  | what /= EDefns
+    = do iLOG $ "Elaborating type decl " ++ show n ++ show o
+         elabType info s f o n ty
+elabDecl' what info (PData s f co d)    
+  | what /= ETypes
+    = do iLOG $ "Elaborating " ++ show (d_name d)
+         elabData info s f co d
+  | otherwise 
+    = do iLOG $ "Elaborating [type of] " ++ show (d_name d)
+         elabData info s f co (PLaterdecl (d_name d) (d_tcon d))
+elabDecl' what info d@(PClauses f o n ps) 
+  | what /= ETypes
+    = do iLOG $ "Elaborating clause " ++ show n
+         i <- get -- get the type options too
+         let o' = case lookupCtxt Nothing n (idris_flags i) of
+                    [fs] -> fs
+                    [] -> []
+         elabClauses info f (o ++ o') n ps
+elabDecl' what info (PMutual f ps) 
+    = do mapM_ (elabDecl ETypes info) ps
+         mapM_ (elabDecl EDefns info) ps
+elabDecl' what info (PParams f ns ps) 
     = do i <- get
          iLOG $ "Expanding params block with " ++ show (concatMap declared ps)
          let nblock = pblock i
-         mapM_ (elabDecl' info) nblock 
+         mapM_ (elabDecl' what info) nblock 
   where
     pinfo = let ds = concatMap declared ps
                 newps = params info ++ ns
@@ -936,29 +983,35 @@ elabDecl' info (PParams f ns ps)
                        inblock = newb }
     pblock i = map (expandParamsD i id ns (concatMap declared ps)) ps
 
-elabDecl' info (PNamespace n ps) = mapM_ (elabDecl' ninfo) ps
+elabDecl' what info (PNamespace n ps) = mapM_ (elabDecl' what ninfo) ps
   where
     ninfo = case namespace info of
                 Nothing -> info { namespace = Just [n] }
                 Just ns -> info { namespace = Just (n:ns) } 
-elabDecl' info (PClass s f cs n ps ds) = do iLOG $ "Elaborating class " ++ show n
-                                            elabClass info s f cs n ps ds
-elabDecl' info (PInstance s f cs n ps t expn ds) 
+elabDecl' what info (PClass s f cs n ps ds) 
+  | what /= EDefns
+    = do iLOG $ "Elaborating class " ++ show n
+         elabClass info s f cs n ps ds
+elabDecl' what info (PInstance s f cs n ps t expn ds) 
+  | what /= ETypes
     = do iLOG $ "Elaborating instance " ++ show n
          elabInstance info s f cs n ps t expn ds
-elabDecl' info (PRecord s f tyn ty cn cty)
+elabDecl' what info (PRecord s f tyn ty cn cty)
+  | what /= EDefns
     = do iLOG $ "Elaborating record " ++ show tyn
          elabRecord info s f tyn ty cn cty
-elabDecl' info (PDSL n dsl)
+elabDecl' _ info (PDSL n dsl)
     = do i <- get
          put (i { idris_dsls = addDef n dsl (idris_dsls i) }) 
          addIBC (IBCDSL n)
-elabDecl' info (PDirective i) = i
+elabDecl' what info (PDirective i) 
+  | what /= EDefns = i
+elabDecl' _ _ _ = return () -- skipped this time 
 
 elabCaseBlock info d@(PClauses f o n ps) 
         = do addIBC (IBCDef n)
 --              iputStrLn $ "CASE BLOCK: " ++ show (n, d)
-             elabDecl' info d 
+             elabDecl' EAll info d 
 
 -- elabDecl' info (PImport i) = loadModule i
 

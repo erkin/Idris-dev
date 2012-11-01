@@ -7,7 +7,9 @@ import System.Exit
 
 import Data.Maybe
 import Data.Version
-import Control.Monad.State
+import Control.Monad.Trans.State.Strict ( execStateT, get, put )
+import Control.Monad.Trans ( liftIO )
+import Control.Monad ( when )
 
 import Core.CoreParser
 import Core.ShellParser
@@ -78,6 +80,8 @@ usagemsg = "Idris version " ++ ver ++ "\n" ++
            "\t-i [dir]          Add directory to the list of import paths\n" ++
            "\t--ibcsubdir [dir] Write IBC files into sub directory\n" ++
            "\t--noprelude       Don't import the prelude\n" ++
+           "\t--total           Require functions to be total by default\n" ++
+           "\t--warnpartial     Warn about undeclared partial functions\n" ++
            "\t--typeintype      Disable universe checking\n" ++
            "\t--log [level]     Set debugging log level\n" ++
            "\t--llvm            Use the LLVM code generation backend\n" ++

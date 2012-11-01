@@ -58,18 +58,18 @@ type Clause   = ([Pat], (Term, Term))
 type CS = ([Term], Int)
 
 instance TermSize SC where
-    termsize (Case n as) = termsize as
-    termsize (STerm t) = termsize t
-    termsize _ = 1
+    termsize n (Case n' as) = termsize n as
+    termsize n (STerm t) = termsize n t
+    termsize n _ = 1
 
 instance TermSize CaseAlt where
-    termsize (ConCase _ _ _ s) = termsize s
-    termsize (ConstCase _ s) = termsize s
-    termsize (DefaultCase s) = termsize s
+    termsize n (ConCase _ _ _ s) = termsize n s
+    termsize n (ConstCase _ s) = termsize n s
+    termsize n (DefaultCase s) = termsize n s
 
 -- simple terms can be inlined trivially - good for primitives in particular
-small :: SC -> Bool
-small t = termsize t < 150
+small :: Name -> SC -> Bool
+small n t = termsize n t < 50
 
 namesUsed :: SC -> [Name]
 namesUsed sc = nub $ nu' [] sc where
@@ -217,7 +217,7 @@ toPat tc tms = evalState (mapM (\x -> toPat' x []) tms) []
                                           else do put (n : ns)
                                                   return (PV n)
     toPat' (App f a)  args = toPat' f (a : args)
-    toPat' (Constant x@(I _)) [] = return $ PConst x 
+    toPat' (Constant x) [] = return $ PConst x 
     toPat' _            _  = return PAny
 
 

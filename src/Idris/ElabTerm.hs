@@ -151,8 +151,11 @@ elab ist info pattern tcgen fn tm
               showHd x = show x
     elab' ina (PAlternative False as) 
         = trySeq as
-        where trySeq [] = fail "All alternatives fail to elaborate"
-              trySeq (x : xs) = try (elab' ina x) (trySeq xs)
+        where -- if none work, take the error from the first
+              trySeq (x : xs) = let e1 = elab' ina x in
+                                    try e1 (trySeq' e1 xs)
+              trySeq' deferr [] = deferr
+              trySeq' deferr (x : xs) = try (elab' ina x) (trySeq' deferr xs)
     elab' ina (PPatvar fc n) | pattern = patvar n
     elab' (ina, guarded) (PRef fc n) | pattern && not (inparamBlock n)
                          = do ctxt <- get_context
@@ -172,7 +175,11 @@ elab ist info pattern tcgen fn tm
                                 _ -> True
     elab' ina (PRef fc n) = erun fc $ do apply (Var n) []; solve
     elab' ina@(_, a) (PLam n Placeholder sc)
-          = do attack; intro (Just n); elabE (True, a) sc; solve
+          = do -- n' <- unique_hole n
+               -- let sc' = mapPT (repN n n') sc
+               attack; intro (Just n); elabE (True, a) sc; solve
+       where repN n n' (PRef fc x) | x == n' = PRef fc n'
+             repN _ _ t = t
     elab' ina@(_, a) (PLam n ty sc)
           = do hsin <- get_holes
                ptmin <- get_term

@@ -84,6 +84,8 @@ loadModule f
 loadSource :: Bool -> FilePath -> Idris () 
 loadSource lidr f 
              = do iLOG ("Reading " ++ f)
+                  i <- getIState
+                  let def_total = default_total i
                   file_in <- liftIO $ readFile f
                   file <- if lidr then tclift $ unlit f file_in else return file_in
                   (mname, modules, rest, pos) <- parseImports f file
@@ -102,8 +104,17 @@ loadSource lidr f
                   -- Now add all the declarations to the context
                   v <- verbose
                   when v $ iputStrLn $ "Type checking " ++ f
-                  mapM_ (elabDecl toplevel) ds
+                  elabDecls toplevel ds
                   i <- get
+                  -- simplify every definition do give the totality checker
+                  -- a better chance
+                  mapM_ (\n -> do logLvl 5 $ "Simplifying " ++ show n
+                                  updateContext (simplifyCasedef n))
+                           (map snd (idris_totcheck i))
+                  -- build size change graph from simplified definitions
+                  iLOG "Totality checking"
+                  i <- get
+--                   mapM_ buildSCG (idris_totcheck i)
                   mapM_ checkDeclTotality (idris_totcheck i)
                   iLOG ("Finished " ++ f)
                   ibcsd <- valIBCSubDir i
@@ -117,7 +128,8 @@ loadSource lidr f
                     idrisCatch (do writeIBC f ibc; clearIBC)
                                (\c -> return ()) -- failure is harmless
                   i <- getIState
-                  putIState (i { hide_list = [] })
+                  putIState (i { default_total = def_total,
+                                 hide_list = [] })
                   return ()
   where
     namespaces []     ds = ds
@@ -294,6 +306,7 @@ collect (c@(PClauses _ o _ _) : ds)
         getfc (PClauses fc _ _ _) = fc
 
 collect (PParams f ns ps : ds) = PParams f ns (collect ps) : collect ds
+collect (PMutual f ms : ds) = PMutual f (collect ms) : collect ds
 collect (PNamespace ns ps : ds) = PNamespace ns (collect ps) : collect ds
 collect (PClass f s cs n ps ds : ds') = PClass f s cs n ps (collect ds) : collect ds'
 collect (PInstance f s cs n ps t en ds : ds') 
@@ -317,6 +330,7 @@ pDecl syn = do notEndBlock
            return [d']
     <|> pUsing syn
     <|> pParams syn
+    <|> pMutual syn
     <|> pNamespace syn
     <|> pClass syn
     <|> pInstance syn
@@ -441,6 +455,16 @@ pParams syn =
        closeBlock 
        fc <- pfc
        return [PParams fc ns (concat ds)]
+
+pMutual :: SyntaxInfo -> IParser [PDecl]
+pMutual syn = 
+    do reserved "mutual"
+       openBlock 
+       let pvars = syn_params syn
+       ds <- many1 (pDecl syn)
+       closeBlock 
+       fc <- pfc
+       return [PMutual fc (concat ds)]
 
 pNamespace :: SyntaxInfo -> IParser [PDecl]
 pNamespace syn =
@@ -635,7 +659,7 @@ pAccessibility
 pFnOpts :: [FnOpt] -> IParser [FnOpt]
 pFnOpts opts
         = do reserved "total"; pFnOpts (TotalFn : opts)
-      <|> do reserved "partial"; pFnOpts (opts \\ [TotalFn])
+      <|> do reserved "partial"; pFnOpts (PartialFn : (opts \\ [TotalFn]))
       <|> try (do lchar '%'; reserved "export"; c <- strlit; 
                   pFnOpts (CExport c : opts))
       <|> do lchar '%'; reserved "assert_total"; pFnOpts (AssertTotal : opts)
@@ -711,13 +735,13 @@ bracketed syn =
 --                     e <- pExpr syn; symbol ":"; t <- pExpr syn; lchar ')'
 --                     return (PTyped e t))
         <|> try (do fc <- pfc; o <- operator; e <- pExpr syn; lchar ')'
-                    return $ PLam (MN 0 "x") Placeholder
-                                  (PApp fc (PRef fc (UN o)) [pexp (PRef fc (MN 0 "x")), 
+                    return $ PLam (MN 1000 "ARG") Placeholder
+                                  (PApp fc (PRef fc (UN o)) [pexp (PRef fc (MN 1000 "ARG")), 
                                                              pexp e]))
         <|> try (do fc <- pfc; e <- pSimpleExpr syn; o <- operator; lchar ')'
-                    return $ PLam (MN 0 "x") Placeholder
+                    return $ PLam (MN 1000 "ARG") Placeholder
                                   (PApp fc (PRef fc (UN o)) [pexp e,
-                                                             pexp (PRef fc (MN 0 "x"))]))
+                                                             pexp (PRef fc (MN 1000 "ARG"))]))
 
 pCaseOpt :: SyntaxInfo -> IParser (PTerm, PTerm)
 pCaseOpt syn = do lhs <- pExpr syn; symbol "=>"; rhs <- pExpr syn
@@ -727,7 +751,8 @@ modifyConst :: SyntaxInfo -> FC -> PTerm -> PTerm
 modifyConst syn fc (PConstant (I x)) 
     | not (inPattern syn)
         = PApp fc (PRef fc (UN "fromInteger")) [pexp (PConstant (I x))]
-    | otherwise = PConstant (I x)
+    | otherwise = PAlternative False
+                     [PConstant (I x), PConstant (BI (toEnum x))]
 modifyConst syn fc x = x
 
 pList syn = do lchar '['; fc <- pfc; xs <- sepBy (pExpr syn) (lchar ','); lchar ']'
@@ -1099,34 +1124,36 @@ pData syn = try (do acc <- pAccessibility
                     tyn_in <- pfName
                     ty <- pTSig (impOK syn)
                     let tyn = expandNS syn tyn_in
-                    reserved "where"
-                    openBlock
-                    pushIndent
-                    cons <- many (do notEndBlock
-                                     c <- pConstructor syn
-                                     pKeepTerminator
-                                     return c) -- (lchar '|')
-                    popIndent
-                    closeBlock 
-                    accData acc tyn (map (\ (n, _, _) -> n) cons)
-                    return $ PData syn fc co (PDatadecl tyn ty cons))
+                    option (PData syn fc co (PLaterdecl tyn ty)) (do
+                      reserved "where"
+                      openBlock
+                      pushIndent
+                      cons <- many (do notEndBlock
+                                       c <- pConstructor syn
+                                       pKeepTerminator
+                                       return c) -- (lchar '|')
+                      popIndent
+                      closeBlock 
+                      accData acc tyn (map (\ (n, _, _) -> n) cons)
+                      return $ PData syn fc co (PDatadecl tyn ty cons)))
         <|> try (do pushIndent
                     acc <- pAccessibility
                     co <- pDataI
                     fc <- pfc
                     tyn_in <- pfName
                     args <- many pName
-                    let tyn = expandNS syn tyn_in
-                    lchar '='
-                    cons <- sepBy1 (pSimpleCon syn) (lchar '|')
-                    pTerminator
-                    let conty = mkPApp fc (PRef fc tyn) (map (PRef fc) args)
                     let ty = bindArgs (map (const PSet) args) PSet
-                    cons' <- mapM (\ (x, cargs, cfc) -> 
-                                 do let cty = bindArgs cargs conty
-                                    return (x, cty, cfc)) cons
-                    accData acc tyn (map (\ (n, _, _) -> n) cons')
-                    return $ PData syn fc co (PDatadecl tyn ty cons'))
+                    let tyn = expandNS syn tyn_in
+                    option (PData syn fc co (PLaterdecl tyn ty)) (do
+                      lchar '='
+                      cons <- sepBy1 (pSimpleCon syn) (lchar '|')
+                      pTerminator
+                      let conty = mkPApp fc (PRef fc tyn) (map (PRef fc) args)
+                      cons' <- mapM (\ (x, cargs, cfc) -> 
+                                   do let cty = bindArgs cargs conty
+                                      return (x, cty, cfc)) cons
+                      accData acc tyn (map (\ (n, _, _) -> n) cons')
+                      return $ PData syn fc co (PDatadecl tyn ty cons')))
   where
     mkPApp fc t [] = t
     mkPApp fc t xs = PApp fc t (map pexp xs)
@@ -1232,7 +1259,7 @@ pClause syn
          = try (do pushIndent
                    n_in <- pfName; let n = expandNS syn n_in
                    cargs <- many (pConstraintArg syn)
-                   iargs <- many (pImplicitArg syn)
+                   iargs <- many (pImplicitArg (syn { inPattern = True } ))
                    fc <- pfc
                    args <- many (pArgExpr syn)
                    wargs <- many (pWExpr syn)
@@ -1270,7 +1297,7 @@ pClause syn
        <|> try (do pushIndent
                    n_in <- pfName; let n = expandNS syn n_in
                    cargs <- many (pConstraintArg syn)
-                   iargs <- many (pImplicitArg syn)
+                   iargs <- many (pImplicitArg (syn { inPattern = True } ))
                    fc <- pfc
                    args <- many (pArgExpr syn)
                    wargs <- many (pWExpr syn)

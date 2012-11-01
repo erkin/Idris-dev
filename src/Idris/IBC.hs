@@ -612,14 +612,17 @@ instance Binary Def where
                                         put x1
                                         put x2
                                         put x3
-                CaseOp x1 x2 x3 x4 x5 x6 x7 -> do putWord8 3
+                CaseOp x1 x2 x3 x3a x4 x5 x6 x7 x8 -> 
+                                               do putWord8 3
                                                   put x1
                                                   put x2
                                                   put x3
+                                                  -- no x3a
                                                   put x4
                                                   put x5
                                                   put x6
                                                   put x7
+                                                  put x8
         get
           = do i <- getWord8
                case i of
@@ -636,11 +639,13 @@ instance Binary Def where
                    3 -> do x1 <- get
                            x2 <- get
                            x3 <- get
+                           -- x3 <- get always []
                            x4 <- get
                            x5 <- get
                            x6 <- get
                            x7 <- get
-                           return (CaseOp x1 x2 x3 x4 x5 x6 x7)
+                           x8 <- get
+                           return (CaseOp x1 x2 x3 [] x4 x5 x6 x7 x8)
                    _ -> error "Corrupted binary data for Def"
 
 instance Binary Accessibility where
@@ -760,6 +765,7 @@ instance Binary FnOpt where
                 Specialise x -> do putWord8 4
                                    put x
                 Coinductive -> putWord8 5
+                PartialFn -> putWord8 6
         get
           = do i <- getWord8
                case i of
@@ -770,6 +776,7 @@ instance Binary FnOpt where
                    4 -> do x <- get
                            return (Specialise x)
                    5 -> return Coinductive
+                   6 -> return PartialFn
                    _ -> error "Corrupted binary data for FnOpt"
 
 instance Binary Fixity where
@@ -915,6 +922,9 @@ instance (Binary t) => Binary (PDecl' t) where
                                     put x1
                                     put x2
                                     put x3
+                PMutual x1 x2  -> do putWord8 11
+                                     put x1
+                                     put x2
         get
           = do i <- getWord8
                case i of
@@ -975,6 +985,9 @@ instance (Binary t) => Binary (PDecl' t) where
                             x2 <- get
                             x3 <- get
                             return (PCAF x1 x2 x3)
+                   11 -> do x1 <- get
+                            x2 <- get
+                            return (PMutual x1 x2)
                    _ -> error "Corrupted binary data for PDecl'"
 
 instance Binary SyntaxInfo where
@@ -1055,15 +1068,26 @@ instance (Binary t) => Binary (PClause' t) where
                    _ -> error "Corrupted binary data for PClause'"
 
 instance (Binary t) => Binary (PData' t) where
-        put (PDatadecl x1 x2 x3)
-          = do put x1
-               put x2
-               put x3
+        put x
+          = case x of
+                PDatadecl x1 x2 x3 -> do putWord8 0
+                                         put x1
+                                         put x2
+                                         put x3
+                PLaterdecl x1 x2 -> do putWord8 1
+                                       put x1
+                                       put x2
         get
-          = do x1 <- get
-               x2 <- get
-               x3 <- get
-               return (PDatadecl x1 x2 x3)
+          = do i <- getWord8
+               case i of
+                   0 -> do x1 <- get
+                           x2 <- get
+                           x3 <- get
+                           return (PDatadecl x1 x2 x3)
+                   1 -> do x1 <- get
+                           x2 <- get
+                           return (PLaterdecl x1 x2)
+                   _ -> error "Corrupted binary data for PData'"
 
 instance Binary PTerm where
         put x

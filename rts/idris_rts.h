@@ -23,6 +23,8 @@ typedef struct {
 } con;
 
 typedef struct Closure {
+// Use top 16 bits of ty for saying which heap value is in
+// Bottom 16 bits for closure type
     ClosureType ty;
     union {
         con c;
@@ -49,6 +51,7 @@ typedef struct {
    
     pthread_mutex_t inbox_lock;
     pthread_mutex_t inbox_block;
+    pthread_mutex_t alloc_lock;
     pthread_cond_t inbox_waiting;
 
     VAL* inbox; // Block of memory for storing messages
@@ -56,6 +59,9 @@ typedef struct {
 
     VAL* inbox_ptr; // Next message to read
     VAL* inbox_write; // Location of next message to write
+
+    int processes; // Number of child processes
+    int max_threads; // maximum number of threads to run in parallel
 
     int argc;
     VAL* argv; // command line arguments
@@ -69,7 +75,9 @@ typedef struct {
 } VM;
 
 // Create a new VM
-VM* init_vm(int stack_size, size_t heap_size, int argc, char* argv[]);
+VM* init_vm(int stack_size, size_t heap_size, 
+            int max_threads, 
+            int argc, char* argv[]);
 // Clean up a VM once it's no longer needed
 void terminate(VM* vm);
 
@@ -91,6 +99,15 @@ typedef void(*func)(VM*, VAL*);
 #define GETFLOAT(x) (((VAL)(x))->info.f)
 
 #define TAG(x) (ISINT(x) || x == NULL ? (-1) : ( (x)->ty == CON ? (x)->info.c.tag : (-1)) )
+
+// Use top 16 bits for saying which heap value is in
+// Bottom 16 bits for closure type
+
+#define GETTY(x) ((x)->ty & 0x0000ffff)
+#define SETTY(x,t) (x)->ty = (((x)->ty & 0xffff0000) | (t))
+
+#define GETHEAP(x) ((x)->ty >> 16)
+#define SETHEAP(x,y) (x)->ty = (((x)->ty & 0x0000ffff) | ((t) << 16))
 
 // Integers, floats and operators
 
@@ -125,6 +142,11 @@ VAL MKFLOAT(VM* vm, double val);
 VAL MKSTR(VM* vm, char* str);
 VAL MKPTR(VM* vm, void* ptr);
 
+// following versions don't take a lock when allocating
+VAL MKFLOATc(VM* vm, double val);
+VAL MKSTRc(VM* vm, char* str);
+VAL MKPTRc(VM* vm, void* ptr);
+
 VAL MKCON(VM* vm, VAL cl, int tag, int arity, ...);
 
 #define SETTAG(x, a) (x)->info.c.tag = (a)
@@ -134,8 +156,8 @@ VAL MKCON(VM* vm, VAL cl, int tag, int arity, ...);
 void PROJECT(VM* vm, VAL r, int loc, int arity); 
 void SLIDE(VM* vm, int args);
 
-void* allocate(VM* vm, size_t size);
-void* allocCon(VM* vm, int arity);
+void* allocate(VM* vm, size_t size, int outerlock);
+void* allocCon(VM* vm, int arity, int outerlock);
 
 void* vmThread(VM* callvm, func f, VAL arg);
 
@@ -143,9 +165,11 @@ void* vmThread(VM* callvm, func f, VAL arg);
 VAL copyTo(VM* newVM, VAL x);
 
 // Add a message to another VM's message queue
-void sendMessage(VM* sender, VM* dest, VAL msg);
+void idris_sendMessage(VM* sender, VM* dest, VAL msg);
+// Check whether there are any messages in the queue
+int idris_checkMessages(VM* vm);
 // block until there is a message in the queue
-VAL recvMessage(VM* vm);
+VAL idris_recvMessage(VM* vm);
 
 void dumpVal(VAL r);
 void dumpStack(VM* vm);

@@ -9,7 +9,9 @@
 #include "idris_rts.h"
 #include "idris_gc.h"
 
-VM* init_vm(int stack_size, size_t heap_size, int argc, char* argv[]) {
+VM* init_vm(int stack_size, size_t heap_size, 
+            int max_threads, // not implemented yet
+            int argc, char* argv[]) {
     VAL* valstack = malloc(stack_size*sizeof(VAL));
     int* intstack = malloc(stack_size*sizeof(int));
     double* floatstack = malloc(stack_size*sizeof(double));
@@ -35,16 +37,20 @@ VM* init_vm(int stack_size, size_t heap_size, int argc, char* argv[]) {
     vm->reg1 = NULL;
 
     vm->inbox = malloc(1024*sizeof(VAL));
+    memset(vm->inbox, 0, 1024*sizeof(VAL));
     vm->inbox_end = vm->inbox + 1024;
     vm->inbox_ptr = vm->inbox;
     vm->inbox_write = vm->inbox;
 
     pthread_mutex_init(&(vm->inbox_lock), NULL);
     pthread_mutex_init(&(vm->inbox_block), NULL);
+    pthread_mutex_init(&(vm->alloc_lock), NULL);
     pthread_cond_init(&(vm->inbox_waiting), NULL);
 
+    vm->max_threads = max_threads;
+    vm->processes = 0;
+
     int i;
-    
     // Assumption: there's enough space for this in the initial heap.
     vm->argv = malloc(argc*sizeof(VAL));
     vm->argc = argc;
@@ -70,8 +76,14 @@ void terminate(VM* vm) {
     free(vm);
 }
 
-void* allocate(VM* vm, size_t size) {
+void* allocate(VM* vm, size_t size, int outerlock) {
 //    return malloc(size);
+    int lock = vm->processes > 0 && !outerlock;
+
+    if (lock) { // not message passing
+       pthread_mutex_lock(&vm->alloc_lock); 
+    }
+
     if ((size & 7)!=0) {
 	size = 8 + ((size >> 3) << 3);
     }
@@ -81,16 +93,25 @@ void* allocate(VM* vm, size_t size) {
         *((size_t*)(vm->heap_next)) = size + sizeof(size_t);
         vm -> heap_next += size + sizeof(size_t);
         memset(ptr, 0, size);
+        if (lock) { // not message passing
+           pthread_mutex_unlock(&vm->alloc_lock); 
+        }
         return ptr;
     } else {
-        gc(vm);
-        return allocate(vm, size);
+        idris_gc(vm);
+        if (lock) { // not message passing
+           pthread_mutex_unlock(&vm->alloc_lock); 
+        }
+        return allocate(vm, size, 0);
     }
+
 }
 
-void* allocCon(VM* vm, int arity) {
-    Closure* cl = allocate(vm, sizeof(Closure) + sizeof(VAL)*arity);
-    cl -> ty = CON;
+void* allocCon(VM* vm, int arity, int outer) {
+    Closure* cl = allocate(vm, sizeof(Closure) + sizeof(VAL)*arity,
+                               outer);
+    SETTY(cl, CON);
+
     cl -> info.c.arity = arity;
 //    cl -> info.c.tag = 42424242;
 //    printf("%p\n", cl);
@@ -98,16 +119,16 @@ void* allocCon(VM* vm, int arity) {
 }
 
 VAL MKFLOAT(VM* vm, double val) {
-    Closure* cl = allocate(vm, sizeof(Closure));
-    cl -> ty = FLOAT;
+    Closure* cl = allocate(vm, sizeof(Closure), 0);
+    SETTY(cl, FLOAT);
     cl -> info.f = val;
     return cl;
 }
 
 VAL MKSTR(VM* vm, char* str) {
     Closure* cl = allocate(vm, sizeof(Closure) + // Type) + sizeof(char*) +
-                               sizeof(char)*strlen(str)+1);
-    cl -> ty = STRING;
+                               sizeof(char)*strlen(str)+1, 0);
+    SETTY(cl, STRING);
     cl -> info.str = (char*)cl + sizeof(Closure);
 
     strcpy(cl -> info.str, str);
@@ -115,8 +136,32 @@ VAL MKSTR(VM* vm, char* str) {
 }
 
 VAL MKPTR(VM* vm, void* ptr) {
-    Closure* cl = allocate(vm, sizeof(Closure));
-    cl -> ty = PTR;
+    Closure* cl = allocate(vm, sizeof(Closure), 0);
+    SETTY(cl, PTR);
+    cl -> info.ptr = ptr;
+    return cl;
+}
+
+VAL MKFLOATc(VM* vm, double val) {
+    Closure* cl = allocate(vm, sizeof(Closure), 1);
+    SETTY(cl, FLOAT);
+    cl -> info.f = val;
+    return cl;
+}
+
+VAL MKSTRc(VM* vm, char* str) {
+    Closure* cl = allocate(vm, sizeof(Closure) + // Type) + sizeof(char*) +
+                               sizeof(char)*strlen(str)+1, 1);
+    SETTY(cl, STRING);
+    cl -> info.str = (char*)cl + sizeof(Closure);
+
+    strcpy(cl -> info.str, str);
+    return cl;
+}
+
+VAL MKPTRc(VM* vm, void* ptr) {
+    Closure* cl = allocate(vm, sizeof(Closure), 1);
+    SETTY(cl, PTR);
     cl -> info.ptr = ptr;
     return cl;
 }
@@ -176,7 +221,7 @@ void dumpVal(VAL v) {
         printf("%d ", (int)(GETINT(v)));
         return;
     }
-    switch(v->ty) {
+    switch(GETTY(v)) {
     case CON:
         printf("%d[", v->info.c.tag);
         for(i = 0; i < v->info.c.arity; ++i) {
@@ -198,8 +243,8 @@ void dumpVal(VAL v) {
 }
 
 VAL idris_castIntStr(VM* vm, VAL i) {
-    Closure* cl = allocate(vm, sizeof(Closure) + sizeof(char)*16);
-    cl -> ty = STRING;
+    Closure* cl = allocate(vm, sizeof(Closure) + sizeof(char)*16, 0);
+    SETTY(cl, STRING);
     cl -> info.str = (char*)cl + sizeof(Closure);
     sprintf(cl -> info.str, "%d", (int)(GETINT(i)));
     return cl;
@@ -215,8 +260,8 @@ VAL idris_castStrInt(VM* vm, VAL i) {
 }
 
 VAL idris_castFloatStr(VM* vm, VAL i) {
-    Closure* cl = allocate(vm, sizeof(Closure) + sizeof(char)*32);
-    cl -> ty = STRING;
+    Closure* cl = allocate(vm, sizeof(Closure) + sizeof(char)*32, 0);
+    SETTY(cl, STRING);
     cl -> info.str = (char*)cl + sizeof(Closure);
     sprintf(cl -> info.str, "%g", GETFLOAT(i));
     return cl;
@@ -231,8 +276,9 @@ VAL idris_concat(VM* vm, VAL l, VAL r) {
     char *ls = GETSTR(l);
     // dumpVal(l);
     // printf("\n");
-    Closure* cl = allocate(vm, sizeof(Closure) + strlen(ls) + strlen(rs) + 1);
-    cl -> ty = STRING;
+    Closure* cl = allocate(vm, sizeof(Closure) + strlen(ls) + strlen(rs) + 1,
+                               0);
+    SETTY(cl, STRING);
     cl -> info.str = (char*)cl + sizeof(Closure);
     strcpy(cl -> info.str, ls);
     strcat(cl -> info.str, rs); 
@@ -306,8 +352,8 @@ VAL idris_strTail(VM* vm, VAL str) {
 VAL idris_strCons(VM* vm, VAL x, VAL xs) {
     char *xstr = GETSTR(xs);
     Closure* cl = allocate(vm, sizeof(Closure) +
-                               strlen(xstr) + 2);
-    cl -> ty = STRING;
+                               strlen(xstr) + 2, 0);
+    SETTY(cl, STRING);
     cl -> info.str = (char*)cl + sizeof(Closure);
     cl -> info.str[0] = (char)(GETINT(x));
     strcpy(cl -> info.str+1, xstr);
@@ -321,8 +367,8 @@ VAL idris_strIndex(VM* vm, VAL str, VAL i) {
 VAL idris_strRev(VM* vm, VAL str) {
     char *xstr = GETSTR(str);
     Closure* cl = allocate(vm, sizeof(Closure) +
-                               strlen(xstr) + 1);
-    cl -> ty = STRING;
+                               strlen(xstr) + 1, 0);
+    SETTY(cl, STRING);
     cl -> info.str = (char*)cl + sizeof(Closure);
     int y = 0;
     int x = strlen(xstr);
@@ -335,7 +381,8 @@ VAL idris_strRev(VM* vm, VAL str) {
 }
 
 typedef struct {
-    VM* vm;
+    VM* vm; // thread's VM
+    VM* callvm; // calling thread's VM
     func fn;
     VAL arg;
 } ThreadData;
@@ -343,18 +390,24 @@ typedef struct {
 void* runThread(void* arg) {
     ThreadData* td = (ThreadData*)arg;
     VM* vm = td->vm;
+    VM* callvm = td->callvm;
 
     TOP(0) = td->arg;
     BASETOP(0);
     ADDTOP(1);
     td->fn(vm, NULL);
+    callvm->processes--;
 
     free(td);
+    terminate(vm);
     return NULL;
 }
 
 void* vmThread(VM* callvm, func f, VAL arg) {
-    VM* vm = init_vm(callvm->stack_max - callvm->valstack, callvm->heap_size, 0, NULL);
+    VM* vm = init_vm(callvm->stack_max - callvm->valstack, callvm->heap_size, 
+                     callvm->max_threads,
+                     0, NULL);
+    vm->processes=1; // since it can send and receive messages
     pthread_t t;
     pthread_attr_t attr;
 //    size_t stacksize;
@@ -365,16 +418,18 @@ void* vmThread(VM* callvm, func f, VAL arg) {
 
     ThreadData *td = malloc(sizeof(ThreadData));
     td->vm = vm;
+    td->callvm = callvm;
     td->fn = f;
     td->arg = copyTo(vm, arg);
+    
+    callvm->processes++;
 
     pthread_create(&t, &attr, runThread, td);
-    usleep(100);
+//    usleep(100);
     return vm;
 }
 
-// VM is assumed to be a different vm from the one x lives on (so we don't need
-// to worry about gc moving things, as the VM x is on will not be allocating)
+// VM is assumed to be a different vm from the one x lives on 
 
 VAL copyTo(VM* vm, VAL x) {
     int i;
@@ -383,9 +438,9 @@ VAL copyTo(VM* vm, VAL x) {
     if (x==NULL || ISINT(x)) {
         return x;
     }
-    switch(x->ty) {
+    switch(GETTY(x)) {
     case CON:
-        cl = allocCon(vm, x->info.c.arity);
+        cl = allocCon(vm, x->info.c.arity, 1);
         cl->info.c.tag = x->info.c.tag;
         cl->info.c.arity = x->info.c.arity;
 
@@ -396,16 +451,16 @@ VAL copyTo(VM* vm, VAL x) {
         }
         break;
     case FLOAT:
-        cl = MKFLOAT(vm, x->info.f);
+        cl = MKFLOATc(vm, x->info.f);
         break;
     case STRING:
-        cl = MKSTR(vm, x->info.str);
+        cl = MKSTRc(vm, x->info.str);
         break;
     case BIGINT:
-        cl = MKBIGM(vm, x->info.ptr);
+        cl = MKBIGMc(vm, x->info.ptr);
         break;
     case PTR:
-        cl = MKPTR(vm, x->info.ptr);
+        cl = MKPTRc(vm, x->info.ptr);
         break;
     default:
         assert(0); // We're in trouble if this happens...
@@ -414,14 +469,30 @@ VAL copyTo(VM* vm, VAL x) {
 }
 
 // Add a message to another VM's message queue
-void sendMessage(VM* sender, VM* dest, VAL msg) {
+void idris_sendMessage(VM* sender, VM* dest, VAL msg) {
     // FIXME: If GC kicks in in the middle of the copy, we're in trouble.
     // Probably best check there is enough room in advance. (How?)
 
+    // Also a problem if we're allocating at the same time as the 
+    // destination thread (which is very likely)
+    // Should the inbox be a different memory space?
+    
+    // So: we try to copy, if a collection happens, we do the copy again
+    // under the assumption there's enough space this time.
+
+    int gcs = dest->collections;
+    pthread_mutex_lock(&dest->alloc_lock); 
     VAL dmsg = copyTo(dest, msg);
+    pthread_mutex_unlock(&dest->alloc_lock); 
+
+    if (dest->collections>gcs) {
+        // a collection will have invalidated the copy
+        pthread_mutex_lock(&dest->alloc_lock); 
+        dmsg = copyTo(dest, msg); // try again now there's room...
+        pthread_mutex_unlock(&dest->alloc_lock); 
+    }
 
     pthread_mutex_lock(&(dest->inbox_lock));
-
     *(dest->inbox_write) = dmsg;
    
     dest->inbox_write++;
@@ -435,21 +506,42 @@ void sendMessage(VM* sender, VM* dest, VAL msg) {
     }
 
     // Wake up the other thread
-    pthread_cond_signal(&(dest->inbox_waiting));
+    pthread_mutex_lock(&dest->inbox_block);
+    pthread_cond_signal(&dest->inbox_waiting);
+    pthread_mutex_unlock(&dest->inbox_block);
+
+//    printf("Sending [signalled]...\n");
 
     pthread_mutex_unlock(&(dest->inbox_lock));
+//    printf("Sending [unlock]...\n");
+}
+
+int idris_checkMessages(VM* vm) {
+    VAL msg = *(vm->inbox_ptr);
+    return (msg != NULL);
 }
 
 // block until there is a message in the queue
-VAL recvMessage(VM* vm) {
-    VAL msg = NULL;
+VAL idris_recvMessage(VM* vm) {
+    VAL msg;
+    struct timespec timeout;
+    int status;
 
+    pthread_mutex_lock(&vm->inbox_block);
+    msg = *(vm->inbox_ptr);
     while (msg == NULL) {
-        pthread_mutex_lock(&vm->inbox_block);
-        pthread_cond_wait(&vm->inbox_waiting, &vm->inbox_block);
-        pthread_mutex_unlock(&vm->inbox_block);
+//        printf("No message yet\n");
+//        printf("Waiting [lock]...\n");
+        timeout.tv_sec = time (NULL) + 3;
+        timeout.tv_nsec = 0;
+        status = pthread_cond_timedwait(&vm->inbox_waiting, &vm->inbox_block,
+                               &timeout);
+        (void)(status); //don't emit 'unused' warning
+//        printf("Waiting [unlock]... %d\n", status);
         msg = *(vm->inbox_ptr);
     }
+    pthread_mutex_unlock(&vm->inbox_block);
+
     if (msg != NULL) {
         pthread_mutex_lock(&(vm->inbox_lock));
         *(vm->inbox_ptr) = NULL;

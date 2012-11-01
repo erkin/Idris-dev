@@ -9,13 +9,14 @@ VAL MKBIGI(int val) {
 
 VAL MKBIGC(VM* vm, char* val) {
     mpz_t* bigint;
-    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*));
-    bigint = allocate(vm, sizeof(mpz_t));
+    // FIXME! what if GC happens after cl allocation?
+    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*), 0);
+    bigint = allocate(vm, sizeof(mpz_t), 0);
 
     mpz_init(*bigint);
     mpz_set_str(*bigint, val, 10);
 
-    cl -> ty = BIGINT;
+    SETTY(cl, BIGINT);
     cl -> info.ptr = (void*)bigint;
 
     return cl;
@@ -23,13 +24,28 @@ VAL MKBIGC(VM* vm, char* val) {
 
 VAL MKBIGM(VM* vm, void* big) {
     mpz_t* bigint;
-    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*));
-    bigint = allocate(vm, sizeof(mpz_t));
+    // FIXME! what if GC happens after cl allocation?
+    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*), 0);
+    bigint = allocate(vm, sizeof(mpz_t), 0);
 
     mpz_init(*bigint);
     mpz_set(*bigint, *((mpz_t*)big));
 
-    cl -> ty = BIGINT;
+    SETTY(cl, BIGINT);
+    cl -> info.ptr = (void*)bigint;
+
+    return cl;
+}
+
+VAL MKBIGMc(VM* vm, void* big) {
+    mpz_t* bigint;
+    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*), 1);
+    bigint = allocate(vm, sizeof(mpz_t), 1);
+
+    mpz_init(*bigint);
+    mpz_set(*bigint, *((mpz_t*)big));
+
+    SETTY(cl, BIGINT);
     cl -> info.ptr = (void*)bigint;
 
     return cl;
@@ -38,13 +54,13 @@ VAL MKBIGM(VM* vm, void* big) {
 VAL GETBIG(VM * vm, VAL x) {
     if (ISINT(x)) {
         mpz_t* bigint;
-        VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*));
-        bigint = allocate(vm, sizeof(mpz_t));
+        VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*), 0);
+        bigint = allocate(vm, sizeof(mpz_t), 0);
 
         mpz_init(*bigint);
         mpz_set_si(*bigint, GETINT(x));
 
-        cl -> ty = BIGINT;
+        SETTY(cl, BIGINT);
         cl -> info.ptr = (void*)bigint;
 
         return cl;
@@ -55,40 +71,40 @@ VAL GETBIG(VM * vm, VAL x) {
 
 VAL bigAdd(VM* vm, VAL x, VAL y) {
     mpz_t* bigint;
-    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*));
-    bigint = allocate(vm, sizeof(mpz_t));
+    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*), 0);
+    bigint = allocate(vm, sizeof(mpz_t), 0);
     mpz_add(*bigint, GETMPZ(x), GETMPZ(y));
-    cl -> ty = BIGINT;
+    SETTY(cl, BIGINT);
     cl -> info.ptr = (void*)bigint;
     return cl;
 }
 
 VAL bigSub(VM* vm, VAL x, VAL y) {
     mpz_t* bigint;
-    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*));
-    bigint = allocate(vm, sizeof(mpz_t));
+    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*), 0);
+    bigint = allocate(vm, sizeof(mpz_t), 0);
     mpz_sub(*bigint, GETMPZ(x), GETMPZ(y));
-    cl -> ty = BIGINT;
+    SETTY(cl, BIGINT);
     cl -> info.ptr = (void*)bigint;
     return cl;
 }
 
 VAL bigMul(VM* vm, VAL x, VAL y) {
     mpz_t* bigint;
-    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*));
-    bigint = allocate(vm, sizeof(mpz_t));
+    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*), 0);
+    bigint = allocate(vm, sizeof(mpz_t), 0);
     mpz_mul(*bigint, GETMPZ(x), GETMPZ(y));
-    cl -> ty = BIGINT;
+    SETTY(cl, BIGINT);
     cl -> info.ptr = (void*)bigint;
     return cl;
 }
 
 VAL bigDiv(VM* vm, VAL x, VAL y) {
     mpz_t* bigint;
-    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*));
-    bigint = allocate(vm, sizeof(mpz_t));
+    VAL cl = allocate(vm, sizeof(ClosureType) + sizeof(void*), 0);
+    bigint = allocate(vm, sizeof(mpz_t), 0);
     mpz_div(*bigint, GETMPZ(x), GETMPZ(y));
-    cl -> ty = BIGINT;
+    SETTY(cl, BIGINT);
     cl -> info.ptr = (void*)bigint;
     return cl;
 }
@@ -156,6 +172,11 @@ VAL idris_bigDivide(VM* vm, VAL x, VAL y) {
     } else {
         return bigDiv(vm, GETBIG(vm, x), GETBIG(vm, y));
     }
+}
+
+int bigEqConst(VAL x, int c) {
+    if (ISINT(x)) { return (GETINT(x) == c); }
+    else { return mpz_cmp_si(GETMPZ(x), c); }
 }
 
 VAL bigEq(VM* vm, VAL x, VAL y) {

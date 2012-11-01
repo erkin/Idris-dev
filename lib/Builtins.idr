@@ -1,4 +1,5 @@
 %access public
+%default total
 
 data Exists : (a : Set) -> (P : a -> Set) -> Set where
     Ex_intro : {P : a -> Set} -> (x : a) -> P x -> Exists a P
@@ -20,6 +21,9 @@ sym refl = refl
 
 lazy : a -> a
 lazy x = x -- compiled specially
+
+par : |(thunk:a) -> a
+par x = x -- compiled specially
 
 malloc : Int -> a -> a
 malloc size x = x -- compiled specially
@@ -62,7 +66,7 @@ cong refl = refl
 
 data Bool = False | True
 
-boolElim : (x:Bool) -> |(t : a) -> |(f : a) -> a 
+boolElim : Bool -> |(t : a) -> |(f : a) -> a 
 boolElim True  t e = t
 boolElim False t e = e
 
@@ -234,7 +238,7 @@ instance Num Float where
     abs x = if x<0 then -x else x
     fromInteger = prim__intToFloat 
 
-
+partial
 div : Int -> Int -> Int
 div = prim__divInt
 
@@ -247,15 +251,18 @@ div = prim__divInt
 (++) : String -> String -> String
 (++) = prim__concat
 
+partial
 strHead : String -> Char
 strHead = prim__strHead
 
+partial
 strTail : String -> String
 strTail = prim__strTail
 
 strCons : Char -> String -> String
 strCons = prim__strCons
 
+partial
 strIndex : String -> Int -> Char
 strIndex = prim__strIndex
 
