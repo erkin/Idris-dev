@@ -15,6 +15,7 @@ import Idris.Parser
 import Idris.Primitives
 import Idris.Coverage
 import Idris.UnusedArgs
+import Idris.Docs
 
 import Paths_idris
 import Util.System
@@ -198,6 +199,14 @@ process fn (Check t) = do (tm, ty) <- elabVal toplevel False t
                           let ty' = normaliseC ctxt [] ty
                           iputStrLn (showImp imp (delab ist tm) ++ " : " ++ 
                                     showImp imp (delab ist ty))
+
+process fn (DocStr n) = do i <- get
+                           case lookupCtxtName Nothing n (idris_docstrings i) of
+                                [] -> iputStrLn $ "No documentation for " ++ show n
+                                ns -> mapM_ showDoc ns 
+    where showDoc (n, d) 
+             = do doc <- getDocs n
+                  iputStrLn $ show doc
 process fn Universes = do i <- get
                           let cs = idris_constraints i
 --                        iputStrLn $ showSep "\n" (map show cs)

@@ -35,7 +35,7 @@ type TokenParser a = PTok.TokenParser a
 type IParser = GenParser Char IState
 
 lexer :: TokenParser IState
-lexer  = PTok.makeTokenParser idrisDef
+lexer  = idrisLexer
 
 whiteSpace = PTok.whiteSpace lexer
 lexeme     = PTok.lexeme lexer
@@ -273,7 +273,11 @@ pImport = do reserved "import"; f <- identifier; option ';' (lchar ';')
   where dot '.' = '/'
         dot c = c
 
-parseProg :: SyntaxInfo -> FilePath -> String -> SourcePos -> Idris [PDecl]
+-- a program is a list of declarations, possibly with associated
+-- documentation strings
+
+parseProg :: SyntaxInfo -> FilePath -> String -> SourcePos -> 
+             Idris [PDecl]
 parseProg syn fname input pos
     = do i <- get
          case runParser (do setPosition pos
@@ -308,7 +312,8 @@ collect (c@(PClauses _ o _ _) : ds)
 collect (PParams f ns ps : ds) = PParams f ns (collect ps) : collect ds
 collect (PMutual f ms : ds) = PMutual f (collect ms) : collect ds
 collect (PNamespace ns ps : ds) = PNamespace ns (collect ps) : collect ds
-collect (PClass f s cs n ps ds : ds') = PClass f s cs n ps (collect ds) : collect ds'
+collect (PClass doc f s cs n ps ds : ds') 
+    = PClass doc f s cs n ps (collect ds) : collect ds'
 collect (PInstance f s cs n ps t en ds : ds') 
     = PInstance f s cs n ps t en (collect ds) : collect ds'
 collect (d : ds) = d : collect ds
@@ -418,7 +423,10 @@ pSynSym = try (do lchar '['; n <- pName; lchar ']'
              return (Symbol sym)
 
 pFunDecl' :: SyntaxInfo -> IParser PDecl
-pFunDecl' syn = try (do pushIndent
+pFunDecl' syn = try (do doc <- option "" (pDocComment '|')
+                        -- trace ("Doc: " ++ show doc) $ 
+--                         let doc = ""
+                        pushIndent
                         ist <- getState
                         let initOpts = if default_total ist
                                           then [TotalFn]
@@ -433,7 +441,7 @@ pFunDecl' syn = try (do pushIndent
                         pTerminator 
 --                         ty' <- implicit syn n ty
                         addAcc n acc
-                        return (PTy syn fc opts' n ty))
+                        return (PTy doc syn fc opts' n ty))
             <|> try (pPattern syn)
             <|> try (pCAF syn)
 
@@ -498,7 +506,8 @@ fixity = try (do reserved "infixl"; return Infixl)
 --------- Type classes ---------
 
 pClass :: SyntaxInfo -> IParser [PDecl]
-pClass syn = do acc <- pAccessibility
+pClass syn = do doc <- option "" (pDocComment '|')
+                acc <- pAccessibility
                 reserved "class"; fc <- pfc; cons <- pConstList syn; n_in <- pName
                 let n = expandNS syn n_in
                 cs <- many1 carg
@@ -507,7 +516,7 @@ pClass syn = do acc <- pAccessibility
                 closeBlock
                 let allDs = concat ds
                 accData acc n (concatMap declared allDs)
-                return [PClass syn fc cons n cs allDs]
+                return [PClass doc syn fc cons n cs allDs]
   where
     carg = do lchar '('; i <- pName; lchar ':'; ty <- pExpr syn; lchar ')'
               return (i, ty)
@@ -900,9 +909,10 @@ pPi syn =
      try (do lazy <- option False (do lchar '|'; return True)
              st <- pStatic
              lchar '('; xt <- tyDeclList syn; lchar ')'
+             doc <- option "" (pDocComment '^')
              symbol "->"
              sc <- pExpr syn
-             return (bindList (PPi (Exp lazy st)) xt sc))
+             return (bindList (PPi (Exp lazy st doc)) xt sc))
  <|> try (if implicitAllowed syn 
              then do lazy <- option False (do lchar '|'
                                               return True)
@@ -912,7 +922,7 @@ pPi syn =
                      lchar '}'
                      symbol "->"
                      sc <- pExpr syn
-                     return (bindList (PPi (Imp lazy st)) xt sc)
+                     return (bindList (PPi (Imp lazy st "")) xt sc)
              else fail "No implicit arguments allowed here")
  <|> try (do lchar '{'
              reserved "auto"
@@ -920,7 +930,8 @@ pPi syn =
              lchar '}'
              symbol "->"
              sc <- pExpr syn
-             return (bindList (PPi (TacImp False Dynamic (PTactics [Trivial]))) xt sc))
+             return (bindList (PPi 
+                      (TacImp False Dynamic (PTactics [Trivial]) "")) xt sc))
  <|> try (do lchar '{'
              reserved "default"
              script <- pSimpleExpr syn 
@@ -928,7 +939,7 @@ pPi syn =
              lchar '}'
              symbol "->"
              sc <- pExpr syn
-             return (bindList (PPi (TacImp False Dynamic script)) xt sc))
+             return (bindList (PPi (TacImp False Dynamic script "")) xt sc))
       <|> do --lazy <- option False (do lchar '|'; return True)
              lchar '{'
              reserved "static"
@@ -936,7 +947,7 @@ pPi syn =
              t <- pExpr' syn
              symbol "->"
              sc <- pExpr syn
-             return (PPi (Exp False Static) (MN 42 "__pi_arg") t sc)
+             return (PPi (Exp False Static "") (MN 42 "__pi_arg") t sc)
 
 pConstList :: SyntaxInfo -> IParser [PTerm]
 pConstList syn = try (do lchar '(' 
@@ -1068,6 +1079,7 @@ toTable fs = map (map toBin)
 
 binary name f = Infix (do reservedOp name
                           fc <- pfc; 
+                          doc <- option "" (pDocComment '^')
                           return (f fc)) 
 prefix name f = Prefix (do reservedOp name
                            fc <- pfc;
@@ -1096,7 +1108,7 @@ pRecord syn = do acc <- pAccessibility
                  reserved "where"
                  openBlock
                  pushIndent
-                 (cn, cty, _) <- pConstructor syn
+                 (cdoc, cn, cty, _) <- pConstructor syn
                  pKeepTerminator
                  popIndent
                  closeBlock
@@ -1105,7 +1117,7 @@ pRecord syn = do acc <- pAccessibility
                                                      syn_namespace syn }
                  let fns = getRecNames rsyn cty
                  mapM_ (\n -> addAcc n (toFreeze acc)) fns
-                 return $ PRecord rsyn fc tyn ty cn cty
+                 return $ PRecord "" rsyn fc tyn ty cdoc cn cty
   where
     getRecNames syn (PPi _ n _ sc) = [expandNS syn n, expandNS syn (mkSet n)]
                                        ++ getRecNames syn sc
@@ -1118,13 +1130,14 @@ pDataI = do reserved "data"; return False
      <|> do reserved "codata"; return True
 
 pData :: SyntaxInfo -> IParser PDecl
-pData syn = try (do acc <- pAccessibility
+pData syn = try (do doc <- option "" (pDocComment '|')
+                    acc <- pAccessibility
                     co <- pDataI
                     fc <- pfc
                     tyn_in <- pfName
                     ty <- pTSig (impOK syn)
                     let tyn = expandNS syn tyn_in
-                    option (PData syn fc co (PLaterdecl tyn ty)) (do
+                    option (PData doc syn fc co (PLaterdecl tyn ty)) (do
                       reserved "where"
                       openBlock
                       pushIndent
@@ -1134,9 +1147,10 @@ pData syn = try (do acc <- pAccessibility
                                        return c) -- (lchar '|')
                       popIndent
                       closeBlock 
-                      accData acc tyn (map (\ (n, _, _) -> n) cons)
-                      return $ PData syn fc co (PDatadecl tyn ty cons)))
-        <|> try (do pushIndent
+                      accData acc tyn (map (\ (_, n, _, _) -> n) cons)
+                      return $ PData doc syn fc co (PDatadecl tyn ty cons)))
+        <|> try (do doc <- option "" (pDocComment '|')
+                    pushIndent
                     acc <- pAccessibility
                     co <- pDataI
                     fc <- pfc
@@ -1144,16 +1158,16 @@ pData syn = try (do acc <- pAccessibility
                     args <- many pName
                     let ty = bindArgs (map (const PSet) args) PSet
                     let tyn = expandNS syn tyn_in
-                    option (PData syn fc co (PLaterdecl tyn ty)) (do
+                    option (PData doc syn fc co (PLaterdecl tyn ty)) (do
                       lchar '='
                       cons <- sepBy1 (pSimpleCon syn) (lchar '|')
                       pTerminator
                       let conty = mkPApp fc (PRef fc tyn) (map (PRef fc) args)
-                      cons' <- mapM (\ (x, cargs, cfc) -> 
+                      cons' <- mapM (\ (doc, x, cargs, cfc) -> 
                                    do let cty = bindArgs cargs conty
-                                      return (x, cty, cfc)) cons
-                      accData acc tyn (map (\ (n, _, _) -> n) cons')
-                      return $ PData syn fc co (PDatadecl tyn ty cons')))
+                                      return (doc, x, cty, cfc)) cons
+                      accData acc tyn (map (\ (_, n, _, _) -> n) cons')
+                      return $ PData doc syn fc co (PDatadecl tyn ty cons')))
   where
     mkPApp fc t [] = t
     mkPApp fc t xs = PApp fc t (map pexp xs)
@@ -1161,23 +1175,25 @@ pData syn = try (do acc <- pAccessibility
 bindArgs :: [PTerm] -> PTerm -> PTerm
 bindArgs xs t = foldr (PPi expl (MN 0 "t")) t xs
 
-pConstructor :: SyntaxInfo -> IParser (Name, PTerm, FC)
+pConstructor :: SyntaxInfo -> IParser (String, Name, PTerm, FC)
 pConstructor syn 
-    = do cn_in <- pfName; fc <- pfc
+    = do doc <- option "" (pDocComment '|')
+         cn_in <- pfName; fc <- pfc
          let cn = expandNS syn cn_in
          ty <- pTSig (impOK syn)
 --          ty' <- implicit syn cn ty
-         return (cn, ty, fc)
+         return (doc, cn, ty, fc)
  
 
-pSimpleCon :: SyntaxInfo -> IParser (Name, [PTerm], FC)
+pSimpleCon :: SyntaxInfo -> IParser (String, Name, [PTerm], FC)
 pSimpleCon syn 
      = do cn_in <- pfName
           let cn = expandNS syn cn_in
           fc <- pfc
           args <- many (do notEndApp
                            pSimpleExpr syn)
-          return (cn, args, fc)
+          doc <- option "" (pDocComment '^')
+          return (doc, cn, args, fc)
 
 --------- DSL syntax overloading ---------
 
