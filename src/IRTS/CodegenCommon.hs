@@ -5,7 +5,7 @@ module IRTS.CodegenCommon where
 import Core.TT
 import IRTS.Simplified
 
-import System.IO
+import Control.Exception
 import System.Environment
 
 data DbgLevel = NONE | DEBUG | TRACE deriving Eq
