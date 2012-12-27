@@ -98,98 +98,98 @@ VAL idris_b8SDiv(VM *vm, VAL a, VAL b) {
 VAL idris_b8Lt(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 < m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 < b->info.bits8;
   return cl;
 }
 
 VAL idris_b8Gt(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 > m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 > b->info.bits8;
   return cl;
 }
 
 VAL idris_b8Eq(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 == m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 == b->info.bits8;
   return cl;
 }
 
 VAL idris_b8Lte(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 <= m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 <= b->info.bits8;
   return cl;
 }
 
 VAL idris_b8Gte(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 >= m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 >= b->info.bits8;
   return cl;
 }
 
 VAL idris_b8Not(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 ! m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 ! b->info.bits8;
   return cl;
 }
 
 VAL idris_b8And(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 && m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 && b->info.bits8;
   return cl;
 }
 
 VAL idris_b8Or(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 !! m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 !! b->info.bits8;
   return cl;
 }
 
 VAL idris_b8Neg(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 ~ m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 ~ b->info.bits8;
   return cl;
 }
 
 VAL idris_b8BAnd(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 & m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 & b->info.bits8;
   return cl;
 }
 
 VAL idris_b8BOr(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 | m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 | b->info.bits8;
   return cl;
 }
 
 VAL idris_b8Xor(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 ^ m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 ^ b->info.bits8;
   return cl;
 }
 
 VAL idris_b8LSh(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 << m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 << b->info.bits8;
   return cl;
 }
 
 VAL idris_b8RSh(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS8);
-  cl->info.bits8 = a->info.bits8 >> m->info.bits.8;
+  cl->info.bits8 = a->info.bits8 >> b->info.bits8;
   return cl;
 }
 
@@ -232,98 +232,98 @@ VAL idris_b16SDiv(VM *vm, VAL a, VAL b) {
 VAL idris_b16Lt(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 < m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 < b->info.bits16;
   return cl;
 }
 
 VAL idris_b16Gt(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 > m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 > b->info.bits16;
   return cl;
 }
 
 VAL idris_b16Eq(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 == m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 == b->info.bits16;
   return cl;
 }
 
 VAL idris_b16Lte(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 <= m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 <= b->info.bits16;
   return cl;
 }
 
 VAL idris_b16Gte(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 >= m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 >= b->info.bits16;
   return cl;
 }
 
 VAL idris_b16Not(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 ! m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 ! b->info.bits16;
   return cl;
 }
 
 VAL idris_b16And(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 && m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 && b->info.bits16;
   return cl;
 }
 
 VAL idris_b16Or(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 !! m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 !! b->info.bits16;
   return cl;
 }
 
 VAL idris_b16Neg(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 ~ m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 ~ b->info.bits16;
   return cl;
 }
 
 VAL idris_b16BAnd(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 & m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 & b->info.bits16;
   return cl;
 }
 
 VAL idris_b16BOr(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 | m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 | b->info.bits16;
   return cl;
 }
 
 VAL idris_b16Xor(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 ^ m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 ^ b->info.bits16;
   return cl;
 }
 
 VAL idris_b16LSh(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 << m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 << b->info.bits16;
   return cl;
 }
 
 VAL idris_b16RSh(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS16);
-  cl->info.bits16 = a->info.bits16 >> m->info.bits.16;
+  cl->info.bits16 = a->info.bits16 >> b->info.bits16;
   return cl;
 }
 
@@ -366,98 +366,98 @@ VAL idris_b32SDiv(VM *vm, VAL a, VAL b) {
 VAL idris_b32Lt(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 < m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 < b->info.bits32;
   return cl;
 }
 
 VAL idris_b32Gt(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 > m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 > b->info.bits32;
   return cl;
 }
 
 VAL idris_b32Eq(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 == m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 == b->info.bits32;
   return cl;
 }
 
 VAL idris_b32Lte(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 <= m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 <= b->info.bits32;
   return cl;
 }
 
 VAL idris_b32Gte(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 >= m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 >= b->info.bits32;
   return cl;
 }
 
 VAL idris_b32Not(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 ! m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 ! b->info.bits32;
   return cl;
 }
 
 VAL idris_b32And(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 && m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 && b->info.bits32;
   return cl;
 }
 
 VAL idris_b32Or(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 !! m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 !! b->info.bits32;
   return cl;
 }
 
 VAL idris_b32Neg(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 ~ m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 ~ b->info.bits32;
   return cl;
 }
 
 VAL idris_b32BAnd(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 & m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 & b->info.bits32;
   return cl;
 }
 
 VAL idris_b32BOr(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 | m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 | b->info.bits32;
   return cl;
 }
 
 VAL idris_b32Xor(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 ^ m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 ^ b->info.bits32;
   return cl;
 }
 
 VAL idris_b32LSh(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 << m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 << b->info.bits32;
   return cl;
 }
 
 VAL idris_b32RSh(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS32);
-  cl->info.bits32 = a->info.bits32 >> m->info.bits.32;
+  cl->info.bits32 = a->info.bits32 >> b->info.bits32;
   return cl;
 }
 
@@ -500,98 +500,98 @@ VAL idris_b64SDiv(VM *vm, VAL a, VAL b) {
 VAL idris_b64Lt(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 < m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 < b->info.bits64;
   return cl;
 }
 
 VAL idris_b64Gt(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 > m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 > b->info.bits64;
   return cl;
 }
 
 VAL idris_b64Eq(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 == m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 == b->info.bits64;
   return cl;
 }
 
 VAL idris_b64Lte(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 <= m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 <= b->info.bits64;
   return cl;
 }
 
 VAL idris_b64Gte(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 >= m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 >= b->info.bits64;
   return cl;
 }
 
 VAL idris_b64Not(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 ! m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 ! b->info.bits64;
   return cl;
 }
 
 VAL idris_b64And(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 && m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 && b->info.bits64;
   return cl;
 }
 
 VAL idris_b64Or(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 !! m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 !! b->info.bits64;
   return cl;
 }
 
 VAL idris_b64Neg(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 ~ m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 ~ b->info.bits64;
   return cl;
 }
 
 VAL idris_b64BAnd(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 & m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 & b->info.bits64;
   return cl;
 }
 
 VAL idris_b64BOr(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 | m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 | b->info.bits64;
   return cl;
 }
 
 VAL idris_b64Xor(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 ^ m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 ^ b->info.bits64;
   return cl;
 }
 
 VAL idris_b64LSh(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 << m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 << b->info.bits64;
   return cl;
 }
 
 VAL idris_b64RSh(VM *vm, VAL a, VAL b) {
   VAL cl = allocate(vm, sizeof(Closure), 0);
   SETTY(cl, BITS64);
-  cl->info.bits64 = a->info.bits64 >> m->info.bits.64;
+  cl->info.bits64 = a->info.bits64 >> b->info.bits64;
   return cl;
 }
 
