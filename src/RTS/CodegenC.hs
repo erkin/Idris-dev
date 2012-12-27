@@ -212,6 +212,12 @@ op SubI [l, r] = "INTOP(-, " ++ catom l ++ ", " ++ catom r ++ ")"
 op MulI [l, r] = "INTOP(*, " ++ catom l ++ ", " ++ catom r ++ ")"
 op DivI [l, r] = "INTOP(/, " ++ catom l ++ ", " ++ catom r ++ ")"
 
+op LtI [l, r] = "INTOP(<, " ++ catom l ++ ", " ++ catom r ++ ")"
+op GtI [l, r] = "INTOP(>, " ++ catom l ++ ", " ++ catom r ++ ")"
+op EqI [l, r] = "INTOP(==, " ++ catom l ++ ", " ++ catom r ++ ")"
+op LteI [l, r] = "INTOP(>=, " ++ catom l ++ ", " ++ catom r ++ ")"
+op GteI [l, r] = "INTOP(<=, " ++ catom l ++ ", " ++ catom r ++ ")"
+
 op ConcatS [l,r] = "CONCAT(" ++ catom l ++ ", " ++ catom r ++ ")"
 
 op o args = trace (show (op, args) ++ " operator undefined")
